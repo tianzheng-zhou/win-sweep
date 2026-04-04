@@ -50,8 +50,39 @@ win-sweep 通过 PowerShell 脚本诊断和清理 Windows 系统膨胀：
 ## 环境要求
 
 - Windows 10/11
-- PowerShell 5.1+（需管理员权限执行修改操作；诊断可在普通权限下运行部分功能）
+- PowerShell 5.1+
 - 无外部依赖
+
+### 管理员权限
+
+win-sweep 的大部分修改操作（服务、计划任务、HKLM 注册表）需要管理员权限。**AI 工具的终端继承父进程的权限**，所以需要在启动 AI 工具之前获取管理员权限。
+
+**各工具的提权方式：**
+
+| 工具类型 | 提权方法 |
+|----------|----------|
+| **VS Code**（Copilot） | 右键 VS Code 图标 → 以管理员身份运行 |
+| **终端类工具**（Claude Code, Codex CLI, OpenCode, Kimi Code, Gemini CLI 等） | 先打开管理员终端，再在其中启动工具 |
+
+**打开管理员终端：**
+- **方式 A**：右键开始按钮 → 终端(管理员) / Windows PowerShell(管理员)
+- **方式 B**：搜索 `PowerShell` → 右键 → 以管理员身份运行
+- **方式 C**：`Win+X` → 选择带"管理员"字样的选项
+- **Windows Terminal**：设置 → 默认值 → 以管理员身份运行此配置文件
+
+然后在该终端中正常启动你的 AI 工具即可，工具内的所有命令自动继承管理员权限。
+
+> 如果你不想以管理员身份运行，也可以正常使用——诊断扫描和 HKCU 启动项管理不需要管理员权限。涉及需要提权的操作时，AI 会检测权限不足并提前告知，而非直接执行报错。
+
+| 操作 | 需要管理员 |
+|------|------------|
+| 系统诊断（diagnose.ps1） | 部分（服务详细信息需要） |
+| 服务优化（optimize-services.ps1） | 是 |
+| HKCU 启动项管理（manage-startups.ps1） | 否 |
+| HKLM 启动项管理（manage-startups.ps1 -Scope HKLM） | 是 |
+| 计划任务清理（clean-tasks.ps1） | 是 |
+| 可疑服务检测（detect-suspicious.ps1） | 是 |
+| 变更验证（verify.ps1） | 部分 |
 
 ## 项目结构
 

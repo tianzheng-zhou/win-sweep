@@ -133,7 +133,11 @@ license: MIT
 - **先备份再修改** — 启动项移到 `RunDisabled` 而非直接删除；服务删除前先 `reg export`
 - **遥测三层排查** — 必须同时检查 服务 + 计划任务 + 启动项，只禁一层无效（见 [telemetry.md](./references/telemetry.md)）
 - **判断框架优先于名单** — 参考文档提供的是通用识别模式，而非硬编码的服务名列表。遇到未知服务应套用框架判断，而非仅匹配已知列表
-- **需要管理员权限** — 大部分操作需要提升权限的 PowerShell
+- **需要管理员权限** — 大部分修改操作需要管理员权限的 PowerShell。如果当前终端不是管理员，先检测并提醒用户。检测方法：
+  ```powershell
+  $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  ```
+  如果 `$isAdmin` 为 `$false`，在执行修改操作前告知用户需要以管理员身份重启当前工具（无论是 VS Code、终端模拟器还是其他 AI 编程工具），而非直接执行然后报错。提权方式见 README 的"管理员权限"章节。
 
 ## 参考文档
 
