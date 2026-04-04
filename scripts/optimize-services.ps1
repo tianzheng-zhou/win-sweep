@@ -2,18 +2,19 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    win-sweep 服务优化 — 批量修改服务启动模式。
+    win-sweep service optimization — batch-modify service startup modes.
 .DESCRIPTION
-    根据 AI 传入的服务列表修改启动模式（Auto → Manual/Disabled）。
-    修改前自动导出当前配置作为备份。
-    脚本本身不做决策——由 AI 根据 service-rules.md 框架判断后指定操作。
+    Modifies service startup modes (Auto → Manual/Disabled) based on the service list
+    provided by the AI. Automatically exports current configuration as a backup before changes.
+    This script does not make decisions — the AI determines actions based on the
+    service-rules.md framework and specifies them here.
 .PARAMETER Services
-    JSON 格式的服务操作列表。
-    示例: '[{"Name":"FlexNet","Target":"Manual"},{"Name":"DiagTrack","Target":"Disabled"}]'
+    JSON-formatted service operation list.
+    Example: '[{"Name":"FlexNet","Target":"Manual"},{"Name":"DiagTrack","Target":"Disabled"}]'
 .PARAMETER BackupDir
-    备份目录，默认为 %TEMP%\win-sweep-backup。
+    Backup directory, defaults to %TEMP%\win-sweep-backup.
 .PARAMETER DryRun
-    仅预览，不实际修改。
+    Preview only, no actual modifications.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -26,32 +27,32 @@ param(
     [switch]$DryRun
 )
 
-# ── 解析输入 ──
+# ── Parse input ──
 try {
     $serviceList = $Services | ConvertFrom-Json
 } catch {
-    Write-Error "无法解析 Services 参数。请提供有效的 JSON 数组。"
-    Write-Error "格式: '[{`"Name`":`"ServiceName`",`"Target`":`"Manual`"}]'"
+    Write-Error "Failed to parse Services parameter. Please provide a valid JSON array."
+    Write-Error "Format: '[{`"Name`":`"ServiceName`",`"Target`":`"Manual`"}]'"
     exit 1
 }
 
 if ($serviceList.Count -eq 0) {
-    Write-Host "无服务需要修改。" -ForegroundColor Yellow
+    Write-Host "No services to modify." -ForegroundColor Yellow
     exit 0
 }
 
-# ── 验证目标值 ──
+# ── Validate target values ──
 $validTargets = @('Manual', 'Disabled', 'Auto')
 $targetMap = @{ 'Manual' = 'demand'; 'Disabled' = 'disabled'; 'Auto' = 'auto' }
 
 foreach ($item in $serviceList) {
     if ($item.Target -notin $validTargets) {
-        Write-Error "无效的 Target '$($item.Target)' (服务: $($item.Name))。有效值: $($validTargets -join ', ')"
+        Write-Error "Invalid Target '$($item.Target)' (service: $($item.Name)). Valid values: $($validTargets -join ', ')"
         exit 1
     }
 }
 
-# ── 备份 ──
+# ── Backup ──
 if (-not (Test-Path $BackupDir)) {
     New-Item -Path $BackupDir -ItemType Directory -Force | Out-Null
 }
@@ -59,13 +60,13 @@ if (-not (Test-Path $BackupDir)) {
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backupFile = Join-Path $BackupDir "services-backup-$timestamp.csv"
 
-Write-Host "备份当前服务配置..." -ForegroundColor Cyan
+Write-Host "Backing up current service configuration..." -ForegroundColor Cyan
 $currentAll = Get-CimInstance Win32_Service |
     Select-Object Name, DisplayName, StartMode, State, StartName, PathName
 $currentAll | Export-Csv -Path $backupFile -NoTypeInformation -Encoding UTF8
-Write-Host "  已备份到: $backupFile" -ForegroundColor Green
+Write-Host "  Backed up to: $backupFile" -ForegroundColor Green
 
-# ── 逐个修改 ──
+# ── Modify one by one ──
 $succeeded = @()
 $failed = @()
 $skipped = @()
@@ -75,20 +76,20 @@ foreach ($item in $serviceList) {
     $target = $item.Target
     $scTarget = $targetMap[$target]
 
-    # 检查服务是否存在
+    # Check if service exists
     $current = $currentAll | Where-Object { $_.Name -eq $svcName }
     if (-not $current) {
-        Write-Host "  [SKIP] $svcName — 服务不存在" -ForegroundColor DarkYellow
+        Write-Host "  [SKIP] $svcName — service not found" -ForegroundColor DarkYellow
         $skipped += [PSCustomObject]@{ Name=$svcName; Reason='NotFound' }
         continue
     }
 
-    # 检查是否已是目标模式
+    # Check if already at target mode
     $currentMode = $current.StartMode
     if (($currentMode -eq 'Manual' -and $target -eq 'Manual') -or
         ($currentMode -eq 'Disabled' -and $target -eq 'Disabled') -or
         ($currentMode -eq 'Auto' -and $target -eq 'Auto')) {
-        Write-Host "  [SKIP] $svcName — 已经是 $target" -ForegroundColor DarkGray
+        Write-Host "  [SKIP] $svcName — already $target" -ForegroundColor DarkGray
         $skipped += [PSCustomObject]@{ Name=$svcName; Reason="Already $target" }
         continue
     }
@@ -99,7 +100,7 @@ foreach ($item in $serviceList) {
         continue
     }
 
-    # 执行修改（用单引号包裹服务名，防止 $ 被展开）
+    # Execute change (quote service name to prevent $ expansion)
     Write-Host "  [EXEC] $svcName : $currentMode → $target" -ForegroundColor White -NoNewline
     $output = sc.exe config "$svcName" start= $scTarget 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0 -and $output -match 'SUCCESS') {
@@ -116,18 +117,18 @@ foreach ($item in $serviceList) {
     }
 }
 
-# ── 汇总 ──
+# ── Summary ──
 Write-Host "`n$('=' * 50)" -ForegroundColor Cyan
-Write-Host "汇总: 成功 $($succeeded.Count) | 失败 $($failed.Count) | 跳过 $($skipped.Count)" -ForegroundColor Cyan
+Write-Host "Summary: Succeeded $($succeeded.Count) | Failed $($failed.Count) | Skipped $($skipped.Count)" -ForegroundColor Cyan
 
 if ($succeeded.Count -gt 0) {
-    Write-Host "`n成功:" -ForegroundColor Green
+    Write-Host "`nSucceeded:" -ForegroundColor Green
     $succeeded | Format-Table -AutoSize
 }
 if ($failed.Count -gt 0) {
-    Write-Host "`n失败:" -ForegroundColor Red
+    Write-Host "`nFailed:" -ForegroundColor Red
     $failed | Format-Table -AutoSize
 }
 
-Write-Host "`n备份位置: $backupFile" -ForegroundColor Cyan
-Write-Host "回滚: 手动参考备份 CSV 中的 StartMode 列，使用 sc.exe config 恢复。" -ForegroundColor Cyan
+Write-Host "`nBackup location: $backupFile" -ForegroundColor Cyan
+Write-Host "Rollback: Refer to the StartMode column in the backup CSV and use sc.exe config to restore." -ForegroundColor Cyan

@@ -1,149 +1,149 @@
-# 服务优化规则
+# Service Optimization Rules
 
-本文档为 AI 提供**判断框架**，用于评估任意 Windows 服务是否可以安全修改。
-不依赖硬编码白名单——AI 应基于下述规则对诊断扫描出的每个服务做出独立判断。
-
----
-
-## 核心原则
-
-1. **优先 Manual，慎用 Disabled** — `start= demand` 让 Windows 在需要时自动拉起服务；`start= disabled` 则完全阻止启动，可能导致依赖它的软件报错。只有确认无任何软件依赖时才用 Disabled。
-2. **判断依据是"该服务是否需要常驻"** — 大量服务设为 Auto 只是厂商图省事，实际按需启动即可。
-3. **遥测类服务可直接 Disabled** — 纯数据采集，不影响功能。但需同时排查计划任务和启动项（见 [telemetry.md](./telemetry.md)）。
-4. **已终止/已卸载软件的残留服务可删除** — 可执行文件不存在的服务没有保留价值。
+This document provides a **decision framework** for the AI to evaluate whether any Windows service can be safely modified.
+It does not rely on hardcoded whitelists — the AI should make independent judgments for each service found during diagnostic scans based on the rules below.
 
 ---
 
-## 判断框架：对任意服务的决策流程
+## Core Principles
 
-遇到一个 Auto 启动的服务时，按以下顺序判断：
+1. **Prefer Manual over Disabled** — `start= demand` lets Windows start the service on demand; `start= disabled` completely prevents startup and may cause dependent software to fail. Only use Disabled when you are certain nothing depends on it.
+2. **The key question is "does this service need to run constantly?"** — Many services are set to Auto just because the vendor took the easy route; they work fine starting on demand.
+3. **Telemetry services can be Disabled directly** — Pure data collection with no functional impact. But scheduled tasks and startup items must be checked as well (see [telemetry.md](./telemetry.md)).
+4. **Leftover services from uninstalled/discontinued software can be deleted** — A service whose executable no longer exists has no value.
+
+---
+
+## Decision Framework: Evaluating Any Service
+
+When encountering an Auto-start service, evaluate in this order:
 
 ```
-1. 是否属于"禁止修改"类别？
-   → 是：跳过，不动
-   → 否：继续
+1. Does it belong to the "Do Not Modify" categories?
+   → Yes: Skip — do not touch
+   → No: Continue
 
-2. 可执行文件是否存在？
-   → 不存在：建议删除（sc.exe delete）
-   → 存在：继续
+2. Does the executable file exist?
+   → No: Recommend deletion (sc.exe delete)
+   → Yes: Continue
 
-3. 是否为遥测/数据采集类？
-   → 是：建议 Disabled + 排查计划任务
-   → 否：继续
+3. Is it a telemetry/data collection service?
+   → Yes: Recommend Disabled + check scheduled tasks
+   → No: Continue
 
-4. 是否为已终止产品（如 Flash）？
-   → 是：建议 Disabled 或删除
-   → 否：继续
+4. Is it for a discontinued product (e.g., Flash)?
+   → Yes: Recommend Disabled or deletion
+   → No: Continue
 
-5. 是否为按需使用的软件（非常驻需求）？
-   → 是：建议 Manual
-   → 否：保持 Auto
+5. Is it for on-demand software (not needed constantly)?
+   → Yes: Recommend Manual
+   → No: Keep Auto
 ```
 
 ---
 
-## 禁止修改（硬性规则）
+## Do Not Modify (Hard Rules)
 
-以下**类别**的服务绝对不能动。识别方式是判断服务的功能角色，而非穷举服务名。
+The following **categories** of services must never be changed. Identify by functional role, not by exhaustive name matching.
 
-### 绝对禁止
-| 类别 | 代表服务 | 说明 |
-|------|----------|------|
-| RPC / COM 基础设施 | `RpcSs`, `RpcEptMapper`, `DcomLaunch` | 几乎所有进程间通信的基础，停掉系统立刻异常 |
-| Windows Update | `wuauserv`, `UsoSvc` | 安全更新通道 |
-| 安全防护 | `WinDefend`, `WdNisSvc`, `SecurityHealthService` | Defender 防病毒 |
-| 事件日志 | `EventLog` | 审计和故障排查的基础 |
-| 网络核心 | `Dhcp`, `Dnscache`, `NlaSvc`, `nsi` | 停掉直接断网 |
-| 用户登录 | `LSM`, `Winlogon`（非服务但相关）, `SamSs`, `Netlogon`（域） | 无法登录 |
-| 存储 | `StorSvc`, `VDS` | 磁盘管理 |
-| 加密 | `CryptSvc`, `KeyIso` | 证书、HTTPS、驱动签名验证 |
-| 电源管理 | `Power` | 笔记本合盖/休眠依赖 |
-| 组件服务 | `TrustedInstaller`, `msiserver` | 软件安装和 Windows 更新依赖 |
+### Absolutely Forbidden
+| Category | Representative Services | Reason |
+|----------|------------------------|--------|
+| RPC / COM Infrastructure | `RpcSs`, `RpcEptMapper`, `DcomLaunch` | Foundation for virtually all inter-process communication; stopping these causes immediate system failure |
+| Windows Update | `wuauserv`, `UsoSvc` | Security update channel |
+| Security | `WinDefend`, `WdNisSvc`, `SecurityHealthService` | Defender antivirus |
+| Event Log | `EventLog` | Foundation for auditing and troubleshooting |
+| Network Core | `Dhcp`, `Dnscache`, `NlaSvc`, `nsi` | Stopping these causes network disconnection |
+| User Login | `LSM`, `Winlogon` (not a service but related), `SamSs`, `Netlogon` (domain) | Cannot log in |
+| Storage | `StorSvc`, `VDS` | Disk management |
+| Cryptography | `CryptSvc`, `KeyIso` | Certificates, HTTPS, driver signature verification |
+| Power Management | `Power` | Laptop lid close / hibernation |
+| Component Servicing | `TrustedInstaller`, `msiserver` | Software installation and Windows Update depend on these |
 
-### 判断原则
-- 服务描述中含 "critical"、"必须运行" 等字样 → 高度警惕
-- `svchost.exe -k netsvcs` 组中的核心服务 → 逐个确认再动
-- 不确定时保持 Auto — 宁可多跑一个服务，不冒系统挂掉的风险
-
----
-
-## 可安全改为 Manual 的模式（Auto → Manual）
-
-以下是**通用模式**，适用于任何系统。AI 应根据诊断结果匹配这些模式。
-
-### 模式 1：软件许可证/激活服务
-**特征**：服务名或描述含 `license`、`flexnet`、`sentinel`、`hasp`、`activation`
-**理由**：只在打开对应软件时需要，软件会自动拉起 Manual 服务
-**示例**：FlexNet Licensing Service, hasplms, AdskLicensingService, SolidWorks Flexnet Server
-
-### 模式 2：数据库引擎
-**特征**：服务名含 `SQL`、`MySQL`、`PostgreSQL`、`Mongo`、`Firebird`、`Oracle`
-**理由**：开发/工程环境的数据库不需要常驻，打开客户端工具时启动即可
-**示例**：MSSQLSERVER, MSSQL$实例名, SQLBrowser, SQLWriter, FirebirdGuardianDefaultInstance, MySQL80
-**注意**：PowerShell 中 `$` 需要转义（`` `$ `` 或用单引号包裹服务名）
-
-### 模式 3：打印服务
-**特征**：服务名含 `Print`、`Spooler`，或厂商前缀（`HP`、`Canon`、`Epson`、`Brother`）
-**理由**：不打印时无需运行；`Spooler` 有历史漏洞（PrintNightmare），不常用可关
-**示例**：Spooler, HPAppHelperCap, Canon IJ Network
-
-### 模式 4：外设同步/管理
-**特征**：服务属于非常驻外设（手机同步、蓝牙附件管理、手写板等）
-**示例**：Apple Mobile Device Service, Bonjour Service, WTabletServicePro（Wacom）
-
-### 模式 5：虚拟化平台
-**特征**：服务名含 `vmms`、`Hyper-V`、`WSL`、`Docker`、`Container`、`VBox`
-**理由**：不使用虚拟机/容器时无需常驻
-**示例**：vmms, WSLService, CmService, com.docker.service, VBoxSDS
-
-### 模式 6：软件自动更新服务
-**特征**：服务名或描述含 `update`、`updater`，且非 Windows Update
-**理由**：第三方更新服务常驻只为定期检查更新，完全可以按需
-**示例**：gupdate/gupdatevm（Google）, MicrosoftEdgeUpdate, AdobeARMservice, MozillaMaintenance, brave, opera
-**注意**：不要动 `wuauserv`（Windows Update）和 `UsoSvc`
-
-### 模式 7：厂商后台服务（非核心功能）
-**特征**：显卡驱动附属服务、OEM 预装服务、品牌硬件管理
-**示例**：NVDisplay.ContainerLocalSystem（NVIDIA Container）, AMD Crash Defender, Intel(R) TPM Provisioning Service, LenovoVantageService, HPSupportAssistance
-**判断**：不影响硬件核心功能（出图/运算），只是附加的监控/优化/推广
-
-### 模式 8：搜索/索引服务
-**特征**：服务名含 `Search`、`Index`，或第三方搜索工具
-**示例**：WSearch（Windows Search）, Everything, Listary
-**判断**：SSD 系统上 WSearch 的 Manual 影响不大；HDD 系统如依赖搜索功能则保持 Auto
+### Guiding Principles
+- Service description contains "critical" or "must be running" → Exercise extreme caution
+- Core services in the `svchost.exe -k netsvcs` group → Verify individually before modifying
+- When in doubt, keep Auto — better to have one extra running service than risk system failure
 
 ---
 
-## 可安全禁用的模式（Disabled）
+## Safe to Change to Manual (Auto → Manual)
 
-### 模式 A：遥测/数据采集
-**特征**：服务名或描述含 `telemetry`、`diagnostic`、`CEIP`、`usage report`、`SQM`
-**示例**：DiagTrack, SQLTELEMETRY*, ESRV_SVC_QUEENCREEK, SystemUsageReportSvc_QUEENCREEK
-**重要**：必须同时排查计划任务（见 telemetry.md），否则计划任务会重新拉起进程
+These are **universal patterns** applicable to any system. The AI should match diagnostic results against these patterns.
 
-### 模式 B：已终止/过时产品
-**特征**：属于已 EOL 的产品，或厂商已停止维护
-**示例**：Flash Helper Service, FlashCenterSvc
-**理由**：无安全更新 = 漏洞利用入口
+### Pattern 1: Software License/Activation Services
+**Traits**: Service name or description contains `license`, `flexnet`, `sentinel`, `hasp`, `activation`
+**Rationale**: Only needed when the corresponding software is open; software will auto-start a Manual service
+**Examples**: FlexNet Licensing Service, hasplms, AdskLicensingService, SolidWorks Flexnet Server
 
-### 模式 C：当前系统不适用的功能
-**特征**：服务提供的功能在当前环境下确定不需要
-**示例**：
-| 服务 | 条件 |
-|------|------|
-| `MapsBroker` | 不使用离线地图 |
-| `wisvc` | 非 Insider Preview 用户 |
-| `Fax` | 不用传真 |
-| `RemoteRegistry` | 不需要远程注册表访问（也有安全风险） |
-| `RetailDemo` | 非零售展示机 |
-| `WpcMonSvc` | 无家长控制需求 |
+### Pattern 2: Database Engines
+**Traits**: Service name contains `SQL`, `MySQL`, `PostgreSQL`, `Mongo`, `Firebird`, `Oracle`
+**Rationale**: Databases in dev/engineering environments don't need to run constantly; start when opening the client tool
+**Examples**: MSSQLSERVER, MSSQL$InstanceName, SQLBrowser, SQLWriter, FirebirdGuardianDefaultInstance, MySQL80
+**Note**: `$` in PowerShell needs escaping (`` `$ `` or wrap the service name in single quotes)
+
+### Pattern 3: Print Services
+**Traits**: Service name contains `Print`, `Spooler`, or vendor prefixes (`HP`, `Canon`, `Epson`, `Brother`)
+**Rationale**: Not needed when not printing; `Spooler` has historical vulnerabilities (PrintNightmare) — safe to disable if rarely used
+**Examples**: Spooler, HPAppHelperCap, Canon IJ Network
+
+### Pattern 4: Peripheral Sync/Management
+**Traits**: Service belongs to non-resident peripherals (phone sync, Bluetooth accessory management, tablets, etc.)
+**Examples**: Apple Mobile Device Service, Bonjour Service, WTabletServicePro (Wacom)
+
+### Pattern 5: Virtualization Platforms
+**Traits**: Service name contains `vmms`, `Hyper-V`, `WSL`, `Docker`, `Container`, `VBox`
+**Rationale**: Not needed when VMs/containers are not in use
+**Examples**: vmms, WSLService, CmService, com.docker.service, VBoxSDS
+
+### Pattern 6: Software Auto-Update Services
+**Traits**: Service name or description contains `update`, `updater`, and is NOT Windows Update
+**Rationale**: Third-party update services run constantly just to periodically check for updates; perfectly fine on-demand
+**Examples**: gupdate/gupdatevm (Google), MicrosoftEdgeUpdate, AdobeARMservice, MozillaMaintenance, brave, opera
+**Note**: Do NOT touch `wuauserv` (Windows Update) or `UsoSvc`
+
+### Pattern 7: Vendor Background Services (Non-Core)
+**Traits**: GPU driver auxiliary services, OEM preinstalled services, branded hardware management
+**Examples**: NVDisplay.ContainerLocalSystem (NVIDIA Container), AMD Crash Defender, Intel(R) TPM Provisioning Service, LenovoVantageService, HPSupportAssistance
+**Judgment**: Does not affect core hardware functionality (rendering/computation); only supplementary monitoring/optimization/promotion
+
+### Pattern 8: Search/Index Services
+**Traits**: Service name contains `Search`, `Index`, or third-party search tools
+**Examples**: WSearch (Windows Search), Everything, Listary
+**Judgment**: On SSD systems, setting WSearch to Manual has minimal impact; on HDD systems, keep Auto if search functionality is relied upon
 
 ---
 
-## 边界情况和注意事项
+## Safe to Disable (Disabled)
 
-- **SysMain（Superfetch）**：SSD 系统上收益很小，可改 Manual；HDD 系统保持 Auto
-- **WSearch**：同上逻辑，取决于存储介质和使用习惯
-- **TabletInputService**：不用触摸屏/手写笔可改 Manual，但有些触摸板手势依赖它
-- **多个厂商服务联动**：HP、Lenovo、Dell 等 OEM 常注册 3-5 个互相依赖的服务，改之前查依赖关系（`sc.exe enumdepend`）
-- **域环境额外注意**：`Netlogon`、`LanmanWorkstation`、`LanmanServer` 在域环境中不可动
+### Pattern A: Telemetry/Data Collection
+**Traits**: Service name or description contains `telemetry`, `diagnostic`, `CEIP`, `usage report`, `SQM`
+**Examples**: DiagTrack, SQLTELEMETRY*, ESRV_SVC_QUEENCREEK, SystemUsageReportSvc_QUEENCREEK
+**Important**: Must also check scheduled tasks (see telemetry.md) — otherwise tasks will re-enable the process
+
+### Pattern B: Discontinued/Obsolete Products
+**Traits**: Belongs to an EOL product, or the vendor has stopped maintaining it
+**Examples**: Flash Helper Service, FlashCenterSvc
+**Rationale**: No security updates = exploit entry point
+
+### Pattern C: Features Not Applicable to the Current System
+**Traits**: The service provides functionality that is definitely not needed in the current environment
+**Examples**:
+| Service | Condition |
+|---------|-----------|
+| `MapsBroker` | Offline maps not used |
+| `wisvc` | Not an Insider Preview user |
+| `Fax` | Fax not used |
+| `RemoteRegistry` | Remote registry access not needed (also a security risk) |
+| `RetailDemo` | Not a retail demo machine |
+| `WpcMonSvc` | No parental control requirement |
+
+---
+
+## Edge Cases and Notes
+
+- **SysMain (Superfetch)**: Minimal benefit on SSD systems — can change to Manual; keep Auto on HDD systems
+- **WSearch**: Same logic — depends on storage media and usage habits
+- **TabletInputService**: Can change to Manual if touchscreen/stylus not used, but some touchpad gestures depend on it
+- **Multiple vendor service dependencies**: HP, Lenovo, Dell and other OEMs often register 3-5 interdependent services — check dependencies before changing (`sc.exe enumdepend`)
+- **Domain environment caution**: `Netlogon`, `LanmanWorkstation`, `LanmanServer` must not be modified in domain environments

@@ -1,45 +1,45 @@
-# 可疑服务排查清单
+# Suspicious Service Investigation Checklist
 
-本文档为 AI 提供**系统化的排查框架**，用于识别和处理未知、残留或潜在恶意的 Windows 服务。
-
----
-
-## 风险信号与评分
-
-每个信号有一个权重分。对单个服务累加所有命中的信号分值，得出综合风险。
-
-| # | 信号 | 分值 | 说明 |
-|---|------|------|------|
-| S1 | 可执行文件路径不存在 | +3 | 软件已卸载但服务注册残留 |
-| S2 | 可执行文件未签名 | +3 | 缺少数字签名 — 无法验证来源 |
-| S3 | 签名无效或已过期 | +4 | 比未签名更可疑 — 可能被篡改 |
-| S4 | 以 `LocalSystem` 运行 | +2 | 最高权限；合法服务也常用，需结合其他信号 |
-| S5 | 配置了失败自动重启 | +1 | 持久化机制；合法服务也用，单独不构成高风险 |
-| S6 | 路径在 `ProgramData`、`Temp`、`AppData` 或 `Downloads` | +3 | 用户可写目录 — 合法服务很少装在这里 |
-| S7 | 服务名为随机字符 / 含乱码 / 非 ASCII | +4 | 恶意软件/广告软件的典型命名 |
-| S8 | 服务描述为空 | +1 | 正规软件通常会填写描述 |
-| S9 | `ImagePath` 含可疑参数（如 `-encode`、`-hidden`、`bypass`） | +5 | 强烈暗示恶意行为 |
-| S10 | 可执行文件创建时间与系统安装时间不符，且非近期已知安装 | +2 | 可能是被投放的文件 |
-| S11 | 注册表中无 `Description` 和 `DisplayName` 值 | +2 | 极度精简的注册 — 正规软件不会这样 |
-| S12 | DLL 服务（`svchost.exe -k`）指向不存在的 DLL | +4 | 残留或劫持 |
-
-### 风险等级
-
-| 累计分值 | 等级 | 建议动作 |
-|----------|------|----------|
-| 1-3 | 低 | 记录，暂不处理；可能是合法软件的非典型配置 |
-| 4-6 | 中 | 深入调查（执行下方排查流程），确认后处理 |
-| 7+ | 高 | 强烈建议停止并移除；若文件存在，先备份供取证 |
+This document provides the AI with a **systematic investigation framework** for identifying and handling unknown, leftover, or potentially malicious Windows services.
 
 ---
 
-## 排查流程
+## Risk Signals & Scoring
 
-对每个标记为可疑的服务，按顺序执行以下步骤。
+Each signal carries a weight. Sum all matched signal scores for a given service to derive an overall risk score.
 
-### 第 1 步：基本信息采集
+| # | Signal | Score | Description |
+|---|--------|-------|-------------|
+| S1 | Executable path does not exist | +3 | Software uninstalled but service registration remains |
+| S2 | Executable is unsigned | +3 | No digital signature — origin cannot be verified |
+| S3 | Signature is invalid or expired | +4 | More suspicious than unsigned — possible tampering |
+| S4 | Runs as `LocalSystem` | +2 | Highest privilege; legitimate services also use this — combine with other signals |
+| S5 | Failure action set to auto-restart | +1 | Persistence mechanism; legitimate services also use this — not high-risk alone |
+| S6 | Path in `ProgramData`, `Temp`, `AppData`, or `Downloads` | +3 | User-writable directories — legitimate services are rarely installed here |
+| S7 | Service name is random characters / garbled / non-ASCII | +4 | Typical malware/adware naming |
+| S8 | Service description is empty | +1 | Legitimate software usually fills in a description |
+| S9 | `ImagePath` contains suspicious arguments (e.g., `-encode`, `-hidden`, `bypass`) | +5 | Strongly suggests malicious behavior |
+| S10 | Executable creation time does not match system install date and is not a recent known install | +2 | Possible dropped file |
+| S11 | No `Description` and `DisplayName` values in registry | +2 | Extremely minimal registration — legitimate software does not do this |
+| S12 | DLL service (`svchost.exe -k`) points to a non-existent DLL | +4 | Leftover or DLL hijacking |
 
-一次性获取服务的关键属性：
+### Risk Levels
+
+| Cumulative Score | Level | Recommended Action |
+|-----------------|-------|-------------------|
+| 1-3 | Low | Log and hold — may be legitimate software with atypical configuration |
+| 4-6 | Medium | Investigate further (run the investigation workflow below), then decide |
+| 7+ | High | Strongly recommend stopping and removing; if file exists, back up for forensics first |
+
+---
+
+## Investigation Workflow
+
+For each service flagged as suspicious, execute the following steps in order.
+
+### Step 1: Gather Basic Information
+
+Collect key service attributes in one call:
 
 ```powershell
 Get-CimInstance Win32_Service -Filter "Name='ServiceName'" |
@@ -47,156 +47,156 @@ Get-CimInstance Win32_Service -Filter "Name='ServiceName'" |
                   StartMode, State, ProcessId
 ```
 
-### 第 2 步：可执行文件检查
+### Step 2: Executable File Check
 
-从 `PathName` 中提取实际路径（去掉参数和引号），然后：
+Extract the actual path from `PathName` (strip arguments and quotes), then:
 
 ```powershell
-# 提取路径（处理带参数的 ImagePath）
+# Extract path (handle ImagePath with arguments)
 $imagePath = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\ServiceName").ImagePath
-# 手动检查 $imagePath 中可执行文件的实际路径
+# Manually inspect the actual executable path within $imagePath
 
-# 文件是否存在
+# Check if file exists
 Test-Path "C:\actual\path\to\executable.exe"
 
-# 文件详情
+# File details
 Get-Item "C:\actual\path\to\executable.exe" | Select-Object FullName, CreationTime, LastWriteTime, Length
 ```
 
-**如果文件不存在** → 累加 S1，跳到决策矩阵。
+**If the file does not exist** → Add S1 score, skip to decision matrix.
 
-### 第 3 步：签名验证
+### Step 3: Signature Verification
 
 ```powershell
 Get-AuthenticodeSignature "C:\actual\path\to\executable.exe"
 ```
 
-| Status | 含义 |
-|--------|------|
-| `Valid` | 签名有效 — 记录发布者（Subject），继续检查 |
-| `NotSigned` | 未签名 — 累加 S2 |
-| `HashMismatch` | 文件被修改 — 累加 S3，高度警惕 |
-| `NotTrusted` / `UnknownError` | 证书链异常 — 累加 S3 |
+| Status | Meaning |
+|--------|---------|
+| `Valid` | Signature valid — record the publisher (Subject), continue checking |
+| `NotSigned` | Unsigned — add S2 score |
+| `HashMismatch` | File was modified — add S3 score, high alert |
+| `NotTrusted` / `UnknownError` | Certificate chain anomaly — add S3 score |
 
-### 第 4 步：运行账户与持久化
+### Step 4: Run Account & Persistence
 
 ```powershell
-# 运行账户
+# Run account
 Get-CimInstance Win32_Service -Filter "Name='ServiceName'" | Select-Object StartName
 
-# 失败重启策略
+# Failure restart policy
 sc.exe qfailure "ServiceName"
 ```
 
-`sc.exe qfailure` 输出解读：
-- `RESTART -- Delay = xxx`：配置了自动重启 → 累加 S5
-- `RUN PROCESS`：失败时运行其他程序 → 额外关注该程序路径
-- `(空)` 或全是 `-- Delay = 0`：无特殊配置
+Interpreting `sc.exe qfailure` output:
+- `RESTART -- Delay = xxx`: Auto-restart configured → add S5 score
+- `RUN PROCESS`: Runs another program on failure → investigate that program path
+- `(empty)` or all `-- Delay = 0`: No special configuration
 
-### 第 5 步：依赖关系
+### Step 5: Dependencies
 
 ```powershell
-# 该服务依赖谁
-sc.exe qc "ServiceName"       # DEPENDENCIES 字段
+# What this service depends on
+sc.exe qc "ServiceName"       # DEPENDENCIES field
 
-# 谁依赖该服务
+# What depends on this service
 sc.exe enumdepend "ServiceName"
 ```
 
-如果有其他服务依赖它 → 删除前需评估影响。
+If other services depend on it → assess impact before deleting.
 
-### 第 6 步：网络活动（可选，针对高风险）
+### Step 6: Network Activity (Optional, for High-Risk)
 
-如果服务正在运行且风险分较高：
+If the service is running and has a high risk score:
 
 ```powershell
-# 查看该进程的网络连接
+# Check network connections for this process
 $pid = (Get-CimInstance Win32_Service -Filter "Name='ServiceName'").ProcessId
 Get-NetTCPConnection -OwningProcess $pid -ErrorAction SilentlyContinue |
     Select-Object LocalPort, RemoteAddress, RemotePort, State
 ```
 
-发现对外连接 → 记录远程地址，提升风险等级。
+Outbound connections detected → record remote addresses, escalate risk level.
 
 ---
 
-## 决策矩阵
+## Decision Matrix
 
-根据排查结果，对照以下矩阵决定处理方式：
+Based on investigation results, refer to this matrix for the appropriate action:
 
-| 文件存在 | 签名状态 | 运行账户 | 风险分 | 处理方式 |
-|----------|----------|----------|--------|----------|
-| 否 | — | 任何 | 3+ | **删除**服务注册（残留，无功能） |
-| 是 | Valid + 知名发布者 | LocalService / NetworkService | 1-3 | **合法** — 不处理或按 service-rules 优化 |
-| 是 | Valid + 知名发布者 | LocalSystem | 1-3 | **可能合法** — 微软/大厂驱动常用 LocalSystem，确认发布者后放行 |
-| 是 | Valid + 未知发布者 | 任何 | 4-6 | **调查** — 搜索发布者名称，确认是否为已知软件 |
-| 是 | NotSigned | LocalService | 4-6 | **可疑** — 部分小型合法软件不签名，需确认来源 |
-| 是 | NotSigned | LocalSystem | 7+ | **高风险** — 停止服务，备份文件供取证，建议删除 |
-| 是 | HashMismatch / NotTrusted | 任何 | 7+ | **高风险** — 文件可能被篡改，立即停止，备份取证 |
-
----
-
-## 常见误报
-
-以下情况会触发风险信号但通常是合法的，排查时应优先排除：
-
-| 场景 | 触发信号 | 如何确认是误报 |
-|------|----------|----------------|
-| 微软自带服务以 LocalSystem 运行 | S4 | 路径在 `System32`，签名有效且发布者为 `Microsoft` |
-| 驱动服务（Type = Kernel Driver） | S8（无描述） | `sc.exe qc` 显示 TYPE 为 `KERNEL_DRIVER`，路径在 `drivers\` |
-| 开发工具本地服务（Node.js、Python） | S2（未签名），S6（AppData） | 路径匹配已安装的开发工具目录 |
-| .NET / Java 服务包装器 | S2（主exe签名但wrapper未签名） | `PathName` 指向 `dotnet.exe` 或 `java.exe` + 应用 DLL/JAR |
-| Windows 内置但默认禁用的服务 | S8（无描述） | 服务名在已知 Windows 服务列表中 |
+| File Exists | Signature | Run Account | Risk Score | Action |
+|-------------|-----------|-------------|------------|--------|
+| No | — | Any | 3+ | **Delete** service registration (leftover, non-functional) |
+| Yes | Valid + known publisher | LocalService / NetworkService | 1-3 | **Legitimate** — no action, or optimize per service-rules |
+| Yes | Valid + known publisher | LocalSystem | 1-3 | **Likely legitimate** — Microsoft/major vendor drivers commonly use LocalSystem; verify publisher and allow |
+| Yes | Valid + unknown publisher | Any | 4-6 | **Investigate** — search for the publisher name, confirm if it's known software |
+| Yes | NotSigned | LocalService | 4-6 | **Suspicious** — some small legitimate software is unsigned; confirm origin |
+| Yes | NotSigned | LocalSystem | 7+ | **High risk** — stop service, back up files for forensics, recommend deletion |
+| Yes | HashMismatch / NotTrusted | Any | 7+ | **High risk** — file may be tampered; stop immediately, back up for forensics |
 
 ---
 
-## 处理操作
+## Common False Positives
 
-### 删除前的安全步骤
+The following scenarios trigger risk signals but are usually legitimate — prioritize these exclusions during investigation:
+
+| Scenario | Triggered Signals | How to Confirm False Positive |
+|----------|------------------|------------------------------|
+| Microsoft built-in service running as LocalSystem | S4 | Path is in `System32`, signature valid with publisher `Microsoft` |
+| Driver service (Type = Kernel Driver) | S8 (no description) | `sc.exe qc` shows TYPE as `KERNEL_DRIVER`, path in `drivers\` |
+| Developer tool local service (Node.js, Python) | S2 (unsigned), S6 (AppData) | Path matches a known installed development tool directory |
+| .NET / Java service wrapper | S2 (main exe signed but wrapper unsigned) | `PathName` points to `dotnet.exe` or `java.exe` + application DLL/JAR |
+| Windows built-in but default-disabled service | S8 (no description) | Service name is in the known Windows service list |
+
+---
+
+## Handling Operations
+
+### Safety Steps Before Deletion
 
 ```powershell
-# 1. 备份服务注册表项（可用于恢复）
+# 1. Back up service registry key (can be used for recovery)
 reg export "HKLM\SYSTEM\CurrentControlSet\Services\ServiceName" "$env:TEMP\svc-backup-ServiceName.reg"
 
-# 2. 如果文件存在且需取证，复制到安全位置
+# 2. If the file exists and forensic analysis is needed, copy to a safe location
 # Copy-Item "C:\path\to\suspicious.exe" "$env:TEMP\quarantine\"
 
-# 3. 停止服务（文件不存在时可能报错，可忽略）
+# 3. Stop the service (may error if file doesn't exist — can be ignored)
 sc.exe stop "ServiceName"
 
-# 4. 检查是否有依赖（有依赖则三思）
+# 4. Check for dependents (think twice if there are any)
 sc.exe enumdepend "ServiceName"
 
-# 5. 删除服务注册
+# 5. Delete the service registration
 sc.exe delete "ServiceName"
 ```
 
-### 验证删除结果
+### Verify Deletion Result
 
 ```powershell
-# 确认注册表键已消失
+# Confirm the registry key is gone
 Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\ServiceName"
-# 预期输出：False
+# Expected output: False
 
-# 如果返回 True，服务可能标记为"待删除"，重启后生效
+# If it returns True, the service may be marked as "delete pending" — takes effect after reboot
 ```
 
-### 回滚
+### Rollback
 
-如果误删，用之前导出的 `.reg` 文件恢复：
+If deleted by mistake, restore using the previously exported `.reg` file:
 
 ```powershell
 reg import "$env:TEMP\svc-backup-ServiceName.reg"
-# 恢复后需重启才能生效
+# Reboot required after restore for changes to take effect
 ```
 
 ---
 
-## 快速参考命令
+## Quick Reference Commands
 
-| 目的 | 命令 |
-|------|------|
-| 列出所有非 Microsoft 服务 | `Get-CimInstance Win32_Service \| Where-Object { $_.PathName -and $_.PathName -notmatch 'windows\\system32' }` |
-| 列出所有以 LocalSystem 运行的第三方服务 | `Get-CimInstance Win32_Service \| Where-Object { $_.StartName -eq 'LocalSystem' -and $_.PathName -notmatch 'system32' }` |
-| 列出可执行文件不存在的服务 | 需遍历 + `Test-Path`（见 detect-suspicious.ps1） |
-| 批量检查签名 | `Get-CimInstance Win32_Service \| ForEach-Object { ... Get-AuthenticodeSignature }` |
+| Purpose | Command |
+|---------|---------|
+| List all non-Microsoft services | `Get-CimInstance Win32_Service \| Where-Object { $_.PathName -and $_.PathName -notmatch 'windows\\system32' }` |
+| List all third-party services running as LocalSystem | `Get-CimInstance Win32_Service \| Where-Object { $_.StartName -eq 'LocalSystem' -and $_.PathName -notmatch 'system32' }` |
+| List services whose executable does not exist | Requires iteration + `Test-Path` (see detect-suspicious.ps1) |
+| Batch check signatures | `Get-CimInstance Win32_Service \| ForEach-Object { ... Get-AuthenticodeSignature }` |

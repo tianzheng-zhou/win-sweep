@@ -2,15 +2,15 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    win-sweep 可疑服务检测 — 查找残留/未签名的服务。
+    win-sweep suspicious service detection — find leftover/unsigned services.
 .DESCRIPTION
-    扫描所有已注册服务，基于 12 个风险信号计算量化评分，
-    识别可疑迹象：可执行文件丢失、无数字签名、高权限账户、
-    失败自动重启、乱码服务名等。
+    Scans all registered services and calculates a quantified risk score based on
+    12 risk signals, identifying suspicious indicators: missing executables, no digital
+    signature, high-privilege accounts, failure auto-restart, garbled service names, etc.
 .PARAMETER MinScore
-    最低显示风险分（默认 2，过滤低分噪音）。
+    Minimum risk score to display (default 2, filters out low-score noise).
 .PARAMETER IncludeMicrosoft
-    是否包含路径在 System32 且签名为 Microsoft 的服务（默认排除）。
+    Whether to include services with paths in System32 signed by Microsoft (excluded by default).
 #>
 
 [CmdletBinding()]
@@ -20,20 +20,20 @@ param(
 )
 
 function Get-ExePathFromImagePath([string]$ImagePath) {
-    # 从 ImagePath 提取实际可执行文件路径（去掉参数和引号）
+    # Extract actual executable path from ImagePath (strip arguments and quotes)
     $p = $ImagePath.Trim()
     if ($p.StartsWith('"')) {
         $end = $p.IndexOf('"', 1)
         if ($end -gt 0) { return $p.Substring(1, $end - 1) }
     }
-    # 无引号：尝试逐段匹配 .exe
+    # No quotes: try segment-matching for .exe
     if ($p -match '^(.+\.exe)\b') { return $Matches[1] }
-    # svchost 等
+    # svchost etc.
     if ($p -match '^(\S+)') { return $Matches[1] }
     return $p
 }
 
-Write-Host "扫描所有服务，计算风险评分..." -ForegroundColor Cyan
+Write-Host "Scanning all services, calculating risk scores..." -ForegroundColor Cyan
 
 $allServices = Get-CimInstance Win32_Service
 $results = @()
@@ -42,28 +42,28 @@ foreach ($svc in $allServices) {
     $score = 0
     $signals = @()
 
-    # ── 提取可执行路径 ──
+    # ── Extract executable path ──
     $exePath = $null
     $fileExists = $false
     if ($svc.PathName) {
         $exePath = Get-ExePathFromImagePath $svc.PathName
-        # 展开环境变量
+        # Expand environment variables
         $exePathExpanded = [Environment]::ExpandEnvironmentVariables($exePath)
         $fileExists = Test-Path $exePathExpanded -ErrorAction SilentlyContinue
     }
 
-    # ── S1: 可执行文件不存在 (+3) ──
+    # ── S1: Executable file not found (+3) ──
     if ($svc.PathName -and -not $fileExists) {
         $score += 3; $signals += 'S1:FileNotFound'
     }
 
-    # ── 跳过 Microsoft svchost 服务（除非明确要求） ──
+    # ── Skip Microsoft svchost services (unless explicitly requested) ──
     if (-not $IncludeMicrosoft -and $svc.PathName -match 'windows\\system32' -and $fileExists) {
-        # 快速跳过明显的系统服务，减少签名检查开销
+        # Quick skip for obvious system services to reduce signature check overhead
         if ($svc.PathName -match 'svchost\.exe') { continue }
     }
 
-    # ── S2/S3: 签名检查 ──
+    # ── S2/S3: Signature check ──
     $sigStatus = $null
     if ($fileExists -and $exePathExpanded) {
         try {
@@ -74,13 +74,13 @@ foreach ($svc in $allServices) {
             } elseif ($sig.Status -ne 'Valid') {
                 $score += 4; $signals += "S3:BadSig($($sig.Status))"
             }
-            # 排除 Microsoft 签名的合法服务
+            # Exclude legitimately signed Microsoft services
             if (-not $IncludeMicrosoft -and $sig.Status -eq 'Valid' -and
                 $sig.SignerCertificate.Subject -match 'Microsoft') {
                 if ($score -eq 0) { continue }
             }
         } catch {
-            # 无法检查签名
+            # Unable to check signature
         }
     }
 
@@ -89,7 +89,7 @@ foreach ($svc in $allServices) {
         $score += 2; $signals += 'S4:LocalSystem'
     }
 
-    # ── S5: 失败自动重启 (+1) ──
+    # ── S5: Failure auto-restart (+1) ──
     $failRestart = $false
     try {
         $failOut = sc.exe qfailure $svc.Name 2>$null | Out-String
@@ -99,35 +99,35 @@ foreach ($svc in $allServices) {
         }
     } catch {}
 
-    # ── S6: 路径在用户可写目录 (+3) ──
+    # ── S6: Path in user-writable directory (+3) ──
     if ($exePath -and $exePath -match '(ProgramData|\\Temp\\|AppData|Downloads)') {
         $score += 3; $signals += 'S6:WritablePath'
     }
 
-    # ── S7: 服务名/显示名乱码 (+4) ──
-    $namePattern = '[^\x20-\x7E\u4E00-\u9FFF\u3000-\u303F]'  # 非 ASCII 可打印 + 非中文
-    if ($svc.Name -match '^[a-zA-Z0-9]{16,}$' -or  # 随机长字符串
+    # ── S7: Garbled service/display name (+4) ──
+    $namePattern = '[^\x20-\x7E\u4E00-\u9FFF\u3000-\u303F]'  # Non-ASCII printable + non-CJK
+    if ($svc.Name -match '^[a-zA-Z0-9]{16,}$' -or  # Random long string
         $svc.Name -match $namePattern -or
         ($svc.DisplayName -and $svc.DisplayName -match $namePattern)) {
         $score += 4; $signals += 'S7:SuspiciousName'
     }
 
-    # ── S8: 描述为空 (+1) ──
+    # ── S8: Empty description (+1) ──
     if (-not $svc.Description -or $svc.Description.Trim() -eq '') {
         $score += 1; $signals += 'S8:NoDescription'
     }
 
-    # ── S9: ImagePath 含可疑参数 (+5) ──
+    # ── S9: Suspicious arguments in ImagePath (+5) ──
     if ($svc.PathName -match '(-encode|-hidden|bypass|downloadstring|webclient|invoke-expression)') {
         $score += 5; $signals += 'S9:SuspiciousArgs'
     }
 
-    # ── S11: 无 DisplayName (+2) ──
+    # ── S11: No DisplayName (+2) ──
     if (-not $svc.DisplayName -or $svc.DisplayName.Trim() -eq '') {
         $score += 2; $signals += 'S11:NoDisplayName'
     }
 
-    # ── S12: svchost DLL 服务指向不存在的 DLL (+4) ──
+    # ── S12: svchost DLL service pointing to non-existent DLL (+4) ──
     if ($svc.PathName -match 'svchost\.exe' -and $svc.Name) {
         try {
             $dllPath = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$($svc.Name)\Parameters" -Name ServiceDll -ErrorAction Stop).ServiceDll
@@ -136,11 +136,11 @@ foreach ($svc in $allServices) {
                 $score += 4; $signals += 'S12:MissingDLL'
             }
         } catch {
-            # 无 Parameters\ServiceDll — 正常（非 DLL 服务）
+            # No Parameters\ServiceDll — normal (not a DLL service)
         }
     }
 
-    # ── 过滤低分 ──
+    # ── Filter low scores ──
     if ($score -ge $MinScore) {
         $results += [PSCustomObject]@{
             Score       = $score
@@ -157,31 +157,31 @@ foreach ($svc in $allServices) {
     }
 }
 
-# ── 输出 ──
+# ── Output ──
 $results = $results | Sort-Object Score -Descending
 
 $high = ($results | Where-Object RiskLevel -eq 'HIGH').Count
 $med  = ($results | Where-Object RiskLevel -eq 'MED').Count
 $low  = ($results | Where-Object RiskLevel -eq 'LOW').Count
 
-Write-Host "`n扫描完成: $($allServices.Count) 个服务, 标记 $($results.Count) 个可疑" -ForegroundColor Cyan
+Write-Host "`nScan complete: $($allServices.Count) services scanned, $($results.Count) flagged as suspicious" -ForegroundColor Cyan
 Write-Host "  HIGH: $high | MED: $med | LOW: $low" -ForegroundColor $(if ($high -gt 0) {'Red'} else {'Green'})
 
 if ($results.Count -gt 0) {
-    Write-Host "`n=== HIGH 风险 (7+) ===" -ForegroundColor Red
+    Write-Host "`n=== HIGH Risk (7+) ===" -ForegroundColor Red
     $results | Where-Object RiskLevel -eq 'HIGH' |
         Select-Object Score, Name, DisplayName, Account, Signals, ExePath, FileExists |
         Format-Table -AutoSize -Wrap
 
-    Write-Host "=== MED 风险 (4-6) ===" -ForegroundColor Yellow
+    Write-Host "=== MED Risk (4-6) ===" -ForegroundColor Yellow
     $results | Where-Object RiskLevel -eq 'MED' |
         Select-Object Score, Name, DisplayName, Account, Signals, ExePath |
         Format-Table -AutoSize -Wrap
 
-    Write-Host "=== LOW 风险 (2-3) ===" -ForegroundColor DarkYellow
+    Write-Host "=== LOW Risk (2-3) ===" -ForegroundColor DarkYellow
     $results | Where-Object RiskLevel -eq 'LOW' |
         Select-Object Score, Name, DisplayName, Signals |
         Format-Table -AutoSize -Wrap
 } else {
-    Write-Host "`n未发现可疑服务。" -ForegroundColor Green
+    Write-Host "`nNo suspicious services found." -ForegroundColor Green
 }

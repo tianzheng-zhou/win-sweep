@@ -1,13 +1,13 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    win-sweep 系统诊断 — 扫描并报告系统状态。
+    win-sweep diagnostics — scan and report system status.
 .DESCRIPTION
-    收集磁盘用量、已安装软件、启动项、服务、
-    计划任务、内存占用排行等信息，输出结构化报告。
+    Collects disk usage, installed software, startup items, services,
+    scheduled tasks, and memory usage rankings, outputting a structured report.
 .NOTES
-    完整结果需要管理员权限的 PowerShell。
-    无管理员权限时部分信息会跳过（服务详细信息等）。
+    Full results require an elevated (Administrator) PowerShell session.
+    Without admin privileges, some information will be skipped (service details, etc.).
 #>
 
 [CmdletBinding()]
@@ -28,9 +28,9 @@ function Write-Section([string]$Title) {
 
 $runAll = $Section -contains 'All'
 
-# ── 系统信息 ──
+# ── System Info ──
 if ($runAll -or $Section -contains 'System') {
-    Write-Section '系统信息'
+    Write-Section 'System Info'
     $os = Get-CimInstance Win32_OperatingSystem
     $cs = Get-CimInstance Win32_ComputerSystem
     [PSCustomObject]@{
@@ -46,9 +46,9 @@ if ($runAll -or $Section -contains 'System') {
     } | Format-List
 }
 
-# ── 磁盘用量 ──
+# ── Disk Usage ──
 if ($runAll -or $Section -contains 'Disk') {
-    Write-Section '磁盘用量'
+    Write-Section 'Disk Usage'
     Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
         Select-Object DeviceID,
             @{N='SizeGB';    E={[math]::Round($_.Size / 1GB, 1)}},
@@ -57,8 +57,8 @@ if ($runAll -or $Section -contains 'Disk') {
             @{N='UsedPct';   E={[math]::Round(($_.Size - $_.FreeSpace) / $_.Size * 100, 1)}} |
         Format-Table -AutoSize
 
-    # C 盘顶层目录大小（前 15）
-    Write-Host "`nC:\ 顶层目录大小 (Top 15):" -ForegroundColor Yellow
+    # C: drive top-level directory sizes (top 15)
+    Write-Host "`nC:\ Top-Level Directory Sizes (Top 15):" -ForegroundColor Yellow
     Get-ChildItem C:\ -Directory -ErrorAction SilentlyContinue |
         ForEach-Object {
             $size = (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
@@ -72,9 +72,9 @@ if ($runAll -or $Section -contains 'Disk') {
         Format-Table -AutoSize
 }
 
-# ── 已安装软件 ──
+# ── Installed Software ──
 if ($runAll -or $Section -contains 'Software') {
-    Write-Section '已安装软件 (Top 30 by size)'
+    Write-Section 'Installed Software (Top 30 by size)'
     $regPaths = @(
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
         'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
@@ -88,9 +88,9 @@ if ($runAll -or $Section -contains 'Software') {
         Format-Table -AutoSize
 }
 
-# ── 启动项 ──
+# ── Startup Items ──
 if ($runAll -or $Section -contains 'Startups') {
-    Write-Section '启动项'
+    Write-Section 'Startup Items'
 
     $runKeys = @(
         @{ Scope='HKCU'; Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' }
@@ -109,10 +109,10 @@ if ($runAll -or $Section -contains 'Startups') {
         }
     }
 
-    # RunDisabled（已备份的启动项）
+    # RunDisabled (backed-up startup items)
     $disPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunDisabled'
     if (Test-Path $disPath) {
-        Write-Host "`nHKCU\RunDisabled (已禁用的备份):" -ForegroundColor Yellow
+        Write-Host "`nHKCU\RunDisabled (disabled backups):" -ForegroundColor Yellow
         (Get-ItemProperty $disPath -ErrorAction SilentlyContinue).PSObject.Properties |
             Where-Object { $_.Name -notmatch '^PS(Path|ParentPath|ChildName|Provider|Drive)$' } |
             ForEach-Object { [PSCustomObject]@{ Name=$_.Name; Command=$_.Value } } |
@@ -120,34 +120,34 @@ if ($runAll -or $Section -contains 'Startups') {
     }
 }
 
-# ── 服务 ──
+# ── Services ──
 if ($runAll -or $Section -contains 'Services') {
-    Write-Section '自动启动服务 (非 svchost 优先)'
+    Write-Section 'Auto-Start Services (non-svchost first)'
     $services = Get-CimInstance Win32_Service -Filter "StartMode='Auto'" |
         Select-Object Name, DisplayName, State, StartName,
             @{N='BinaryPath'; E={
-                # 取前 80 个字符，方便阅读
+                # Truncate to first 80 chars for readability
                 $p = $_.PathName
                 if ($p.Length -gt 80) { $p.Substring(0, 77) + '...' } else { $p }
             }},
             @{N='IsSvchost'; E={ $_.PathName -match 'svchost\.exe' }}
 
-    Write-Host "`n非 svchost 自动启动服务 ($($services | Where-Object {-not $_.IsSvchost} | Measure-Object | Select-Object -ExpandProperty Count) 个):" -ForegroundColor Yellow
+    Write-Host "`nNon-svchost auto-start services ($($services | Where-Object {-not $_.IsSvchost} | Measure-Object | Select-Object -ExpandProperty Count)):" -ForegroundColor Yellow
     $services | Where-Object { -not $_.IsSvchost } |
         Sort-Object Name |
         Select-Object Name, DisplayName, State, StartName, BinaryPath |
         Format-Table -AutoSize -Wrap
 
-    Write-Host "`nsvchost 托管的自动启动服务 ($($services | Where-Object {$_.IsSvchost} | Measure-Object | Select-Object -ExpandProperty Count) 个):" -ForegroundColor Yellow
+    Write-Host "`nsvchost-hosted auto-start services ($($services | Where-Object {$_.IsSvchost} | Measure-Object | Select-Object -ExpandProperty Count)):" -ForegroundColor Yellow
     $services | Where-Object { $_.IsSvchost } |
         Sort-Object Name |
         Select-Object Name, DisplayName, State, StartName |
         Format-Table -AutoSize
 }
 
-# ── 计划任务 ──
+# ── Scheduled Tasks ──
 if ($runAll -or $Section -contains 'Tasks') {
-    Write-Section '已启用的非微软计划任务'
+    Write-Section 'Enabled Non-Microsoft Scheduled Tasks'
     Get-ScheduledTask -ErrorAction SilentlyContinue |
         Where-Object { $_.State -ne 'Disabled' -and $_.TaskPath -notmatch '^\\Microsoft\\' } |
         Select-Object TaskName, TaskPath, State,
@@ -160,9 +160,9 @@ if ($runAll -or $Section -contains 'Tasks') {
         Format-Table -AutoSize -Wrap
 }
 
-# ── 内存占用 ──
+# ── Memory Usage ──
 if ($runAll -or $Section -contains 'Memory') {
-    Write-Section '内存占用 Top 30 (非系统进程)'
+    Write-Section 'Memory Usage Top 30 (non-system processes)'
     Get-Process -ErrorAction SilentlyContinue |
         Where-Object { $_.ProcessName -notmatch '^(Idle|System|Registry|Memory Compression|smss|csrss|wininit|winlogon|services|lsass|svchost)$' } |
         Sort-Object WorkingSet64 -Descending | Select-Object -First 30 |
@@ -176,4 +176,4 @@ if ($runAll -or $Section -contains 'Memory') {
         Format-Table -AutoSize
 }
 
-Write-Host "`n诊断完成。" -ForegroundColor Green
+Write-Host "`nDiagnostics complete." -ForegroundColor Green

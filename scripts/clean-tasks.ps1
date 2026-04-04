@@ -1,19 +1,20 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    win-sweep 计划任务清理 — 列出或禁用不必要的计划任务。
+    win-sweep scheduled task cleanup — list or disable unnecessary scheduled tasks.
 .DESCRIPTION
-    识别并禁用非微软的遥测、更新检查等不必要的计划任务。
-    特别关注绕过服务禁用的任务（如 Intel esrv.exe）。
+    Identifies and disables non-Microsoft telemetry, update-checking, and other
+    unnecessary scheduled tasks. Specifically targets tasks that bypass service
+    disabling (e.g., Intel esrv.exe).
 .PARAMETER Action
-    操作模式: List（列出可清理任务）或 Disable（禁用指定任务）。
+    Operation mode: List (list cleanable tasks) or Disable (disable specified tasks).
 .PARAMETER TaskNames
-    要禁用的任务名称数组。Action 为 Disable 时必填。
-    支持通配符匹配。
+    Array of task names to disable. Required when Action is Disable.
+    Supports wildcard matching.
 .PARAMETER IncludeMicrosoft
-    List 模式下是否包含微软任务（默认排除）。
+    Whether to include Microsoft tasks in List mode (excluded by default).
 .NOTES
-    需要管理员权限来禁用系统级计划任务。
+    Requires admin privileges to disable system-level scheduled tasks.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -26,12 +27,12 @@ param(
     [switch]$IncludeMicrosoft
 )
 
-# 已知遥测/无用任务关键词模式
+# Known telemetry/unnecessary task keyword patterns
 $telemetryPattern = 'telemetry|CEIP|SQM|DiagTrack|ESRV|IntelSURQC|NvTm|AdobeGC|UsageReport|Compatibility ?Appraiser|ProgramDataUpdater|Consolidator|UsbCeip|DiskDiagnosticDataCollector'
 
 switch ($Action) {
     'List' {
-        Write-Host "扫描计划任务..." -ForegroundColor Cyan
+        Write-Host "Scanning scheduled tasks..." -ForegroundColor Cyan
 
         $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
             Where-Object {
@@ -39,7 +40,7 @@ switch ($Action) {
                 ($IncludeMicrosoft -or $_.TaskPath -notmatch '^\\Microsoft\\')
             }
 
-        # 分类
+        # Categorize
         $telemetryTasks = @()
         $obsoleteTasks = @()
         $otherTasks = @()
@@ -57,12 +58,12 @@ switch ($Action) {
                 Category   = ''
             }
 
-            # 判断类别
+            # Determine category
             if ($t.TaskName -match $telemetryPattern -or $actionStr -match $telemetryPattern) {
                 $obj.Category = 'Telemetry'
                 $telemetryTasks += $obj
             } elseif ($actionStr -and $actionStr -notmatch '^\s*$') {
-                # 检查可执行文件是否存在
+                # Check if executable file exists
                 $exe = ($t.Actions | Select-Object -First 1).Execute
                 if ($exe -and $exe -notmatch '^%' -and -not (Test-Path $exe -ErrorAction SilentlyContinue)) {
                     $obj.Category = 'Obsolete'
@@ -77,32 +78,32 @@ switch ($Action) {
             }
         }
 
-        # 输出
+        # Output
         if ($telemetryTasks.Count -gt 0) {
-            Write-Host "`n=== 遥测任务 ($($telemetryTasks.Count) 个) — 建议禁用 ===" -ForegroundColor Red
+            Write-Host "`n=== Telemetry Tasks ($($telemetryTasks.Count)) — recommended to disable ===" -ForegroundColor Red
             $telemetryTasks | Select-Object TaskName, TaskPath, Actions |
                 Format-Table -AutoSize -Wrap
         }
 
         if ($obsoleteTasks.Count -gt 0) {
-            Write-Host "=== 残留任务 (exe 不存在, $($obsoleteTasks.Count) 个) — 建议禁用 ===" -ForegroundColor Yellow
+            Write-Host "=== Obsolete Tasks (exe missing, $($obsoleteTasks.Count)) — recommended to disable ===" -ForegroundColor Yellow
             $obsoleteTasks | Select-Object TaskName, TaskPath, Actions |
                 Format-Table -AutoSize -Wrap
         }
 
         if ($otherTasks.Count -gt 0) {
-            Write-Host "=== 其他非微软任务 ($($otherTasks.Count) 个) — 需逐个判断 ===" -ForegroundColor Cyan
+            Write-Host "=== Other Non-Microsoft Tasks ($($otherTasks.Count)) — review individually ===" -ForegroundColor Cyan
             $otherTasks | Select-Object TaskName, TaskPath, State, Actions |
                 Format-Table -AutoSize -Wrap
         }
 
         $total = $telemetryTasks.Count + $obsoleteTasks.Count + $otherTasks.Count
-        Write-Host "共 $total 个活跃的非微软计划任务。" -ForegroundColor Cyan
+        Write-Host "Total: $total active non-Microsoft scheduled tasks." -ForegroundColor Cyan
     }
 
     'Disable' {
         if (-not $TaskNames -or $TaskNames.Count -eq 0) {
-            Write-Error "Disable 操作需要指定 -TaskNames 参数。"
+            Write-Error "Disable action requires the -TaskNames parameter."
             exit 1
         }
 
@@ -111,7 +112,7 @@ switch ($Action) {
                 Where-Object { $_.TaskName -like $pattern -and $_.State -ne 'Disabled' }
 
             if (-not $matched -or $matched.Count -eq 0) {
-                Write-Host "  [SKIP] '$pattern' — 未匹配到活跃任务" -ForegroundColor DarkYellow
+                Write-Host "  [SKIP] '$pattern' — no matching active tasks" -ForegroundColor DarkYellow
                 continue
             }
 
@@ -127,6 +128,6 @@ switch ($Action) {
             }
         }
 
-        Write-Host "`n恢复: Enable-ScheduledTask -TaskName 'TaskName'" -ForegroundColor Cyan
+        Write-Host "`nRestore: Enable-ScheduledTask -TaskName 'TaskName'" -ForegroundColor Cyan
     }
 }
