@@ -43,16 +43,68 @@ AI：[运行诊断] 发现 47 个 Auto 服务、12 个启动项、3 个遥测计
 
 ### 1. 安装
 
-克隆或下载到你的项目中，AI 工具就能发现并使用这些脚本和参考文档。
+win-sweep 遵循 [Agent Skills](https://agentskills.io/) 开放标准——一个 `SKILL.md` 入口文件 + 支撑脚本和文档的目录结构。主流 AI 编程工具均已支持。
 
-各工具的推荐放置位置：
+#### 方式 A：个人全局安装（推荐，所有项目可用）
 
-| 工具 | 放置位置 | 说明 |
-|------|----------|------|
-| **VS Code Copilot** | `~/.copilot/skills/win-sweep/` 或 `.github/skills/win-sweep/` | 作为[自定义技能](https://code.visualstudio.com/docs/copilot/copilot-customization)自动加载 |
-| **Claude Code** | 项目目录下，或在 `CLAUDE.md` 中引用路径 | 自动读取项目内文件 |
-| **Cursor / Windsurf** | 项目目录下，或配置 rules 引用 | 通过 rules 或项目上下文加载 |
-| **其他 AI CLI** | 项目目录下 | 手动指向脚本路径或将参考文档喂给 AI 即可 |
+直接克隆到对应工具的个人技能目录下。**只需选你用的工具。**
+
+```powershell
+# ✅ 跨工具通用路径（VS Code Copilot / Windsurf / Gemini CLI / Codex CLI 均识别）
+git clone https://github.com/tianzheng-zhou/win-sweep.git "$HOME\.agents\skills\win-sweep"
+
+# Claude Code（使用自己的路径，VS Code Copilot 也识别此路径）
+git clone https://github.com/tianzheng-zhou/win-sweep.git "$HOME\.claude\skills\win-sweep"
+```
+
+> 如果你同时使用 Claude Code 和其他工具，需要**两个路径各克隆一份**。
+>
+> 更新：进入对应目录执行 `git pull` 即可。
+
+<details>
+<summary>各工具也有自己的专属路径（可选）</summary>
+
+| 工具 | 个人技能目录 | 说明 |
+|------|-------------|------|
+| **VS Code Copilot** | `~/.copilot/skills/` | [文档](https://code.visualstudio.com/docs/copilot/customization/agent-skills)；也识别 `~/.claude/skills/` 和 `~/.agents/skills/` |
+| **Claude Code** | `~/.claude/skills/` | [文档](https://code.claude.com/docs/en/skills) |
+| **Windsurf** | `~/.codeium/windsurf/skills/` | [文档](https://docs.windsurf.com/windsurf/cascade/skills)；也识别 `~/.agents/skills/` |
+| **Gemini CLI** | `~/.gemini/skills/` | [文档](https://geminicli.com/docs/cli/skills/)；也识别 `~/.agents/skills/`；支持 `gemini skills link <路径>` 一键安装 |
+| **Codex CLI** | `~/.agents/skills/`（唯一路径） | [文档](https://developers.openai.com/codex/skills) |
+
+</details>
+
+#### 方式 B：项目级安装（仅当前项目可用）
+
+克隆到项目的技能目录下，可随项目提交到版本控制：
+
+```powershell
+# 以 .agents/skills/ 为例（覆盖最多工具）
+git clone https://github.com/tianzheng-zhou/win-sweep.git .agents/skills/win-sweep
+```
+
+各路径兼容情况：
+
+| 路径 | 识别的工具 |
+|------|-----------|
+| `.agents/skills/win-sweep/` | VS Code Copilot, Windsurf, Gemini CLI, Codex CLI |
+| `.claude/skills/win-sweep/` | Claude Code, VS Code Copilot |
+| `.github/skills/win-sweep/` | VS Code Copilot |
+| `.windsurf/skills/win-sweep/` | Windsurf |
+| `.gemini/skills/win-sweep/` | Gemini CLI |
+
+> 推荐 `.agents/skills/`——一份文件覆盖最多工具。如果团队也用 Claude Code，再加一份到 `.claude/skills/`。
+
+#### Cursor 用户
+
+Cursor 暂不支持 Agent Skills 标准，需通过 [Rules](https://docs.cursor.com/context/rules) 引入：
+
+1. 将 win-sweep 克隆到项目目录下
+2. 创建 `.cursor/rules/win-sweep.md`，内容引用 SKILL.md 和脚本路径
+
+#### 其他工具
+
+将 win-sweep 目录放在项目中，手动引导 AI 阅读 `SKILL.md` 即可。
 
 ### 2. 开始对话
 
