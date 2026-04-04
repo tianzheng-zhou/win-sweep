@@ -1,6 +1,6 @@
 ---
 name: win-sweep
-description: "Windows system cleanup and optimization toolkit. Use when: Windows cleanup, 系统清理, 电脑太慢, 开机慢, 开机加速, C盘满了, 清理磁盘, 释放空间, 关掉没用的后台程序, 关闭开机自启, 卸载残留清理, 删掉偷偷上传数据的东西, 检查可疑进程, 清理没用的定时任务, disable services, disable startup items, reduce boot time, free disk space, uninstall leftovers, telemetry removal, suspicious service detection, scheduled task cleanup"
+description: "Windows system cleanup and optimization toolkit. Use when: Windows cleanup, 系统清理, 电脑太慢, 开机慢, 开机加速, C盘满了, 清理磁盘, 释放空间, 关掉没用的后台程序, 关闭开机自启, 卸载残留清理, 删掉偷偷上传数据的东西, 检查可疑进程, 清理没用的定时任务, 卸载软件, 彻底删除软件, 强力卸载, 清除残留, 卸载流氓软件, 删除360, 卸载鲁大师, 清理2345, 国产流氓软件, 主页被劫持, 浏览器主页锁定, 卸载McAfee, 卸载Norton, 删除屏保软件, 清理壁纸软件, 删除CCleaner, 假优化软件, 假驱动更新, scareware, uninstall software, force uninstall, remove bloatware, clean uninstall leftovers, remove Chinese bloatware, remove scareware, remove screensaver, disable services, disable startup items, reduce boot time, free disk space, uninstall leftovers, telemetry removal, suspicious service detection, scheduled task cleanup"
 license: MIT
 ---
 
@@ -35,6 +35,7 @@ Execute targeted fixes based on diagnostic results. **All modification operation
 2. [Startup Management](./scripts/manage-startups.ps1) — Disable startup items with backup to `RunDisabled` registry key
 3. [Scheduled Task Cleanup](./scripts/clean-tasks.ps1) — Disable unnecessary scheduled tasks
 4. [Suspicious Service Detection](./scripts/detect-suspicious.ps1) — Find leftover/unsigned/suspicious services
+5. [Software Uninstall & Cleanup](./scripts/uninstall-software.ps1) — Uninstall programs via winget/native uninstaller, then scan and remove leftover services, tasks, startup items, directories, and registry entries
 
 ### Phase 3: Verification (Safe — No Confirmation Needed)
 
@@ -134,11 +135,37 @@ This enables post-hoc auditing and troubleshooting.
 - **Three-layer telemetry sweep** — Must check services + scheduled tasks + startup items simultaneously; disabling only one layer is ineffective (see [telemetry.md](./references/telemetry.md))
 - **Check what the service actually does** — Many games and third-party apps silently install always-on services (anti-cheat engines, game platform launchers, companion apps). During diagnosis, identify each service's actual purpose and whether it genuinely needs to run at boot. If the user only plays a game occasionally, its background service doesn't need to be Auto (see Pattern 9 & 10 in [service-rules.md](./references/service-rules.md))
 - **Decision framework over hardcoded lists** — Reference docs provide universal identification patterns, not hardcoded service name lists. Apply the framework to unknown services rather than only matching known lists
-- **Administrator privileges required** — Most modification operations require an elevated PowerShell session. If the current terminal is not elevated, detect and notify the user first. Detection:
+- **Administrator privileges required** — Both diagnosis and modification benefit significantly from an elevated PowerShell session. **Without admin, diagnosis is incomplete**: service details (binary path, startup account, failure actions), HKLM startup items, scheduled task internals, and signature checks may fail or return partial data. The AI must detect the privilege level at the start of every session and, if not elevated, **proactively warn the user with a clear summary of what will be missing**:
+
+  ```
+  ⚠️ Current session does NOT have Administrator privileges.
+
+  Impact on diagnosis:
+  - Service binary paths and startup accounts: may be incomplete
+  - HKLM startup items: cannot read
+  - Scheduled task details: limited
+  - Signature verification for some executables: may fail
+  - Memory usage for system processes: hidden
+
+  Impact on modifications:
+  - Service optimization: will fail
+  - HKLM startup items: cannot modify
+  - Scheduled task cleanup: will fail
+  - Software uninstall (system-level): will fail
+  - Suspicious service deletion: will fail
+
+  I can still run a partial diagnostic scan, but the results will be incomplete
+  and I may miss important issues.
+
+  Recommend: Restart [your tool] as Administrator for full access.
+  [How to elevate: right-click the app icon → Run as administrator]
+  ```
+
+  Detection:
   ```powershell
   $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   ```
-  If `$isAdmin` is `$false`, inform the user to restart their tool (whether VS Code, a terminal emulator, or another AI coding tool) as Administrator before executing modifications — rather than running and failing. See the "Administrator Privileges" section in the README.
+  If `$isAdmin` is `$false`, **always** display the warning above before proceeding. Do not silently continue. The user must make an informed decision about whether to proceed with limited results or restart with admin rights. See the "Administrator Privileges" section in the README.
 
 ## Reference Documents
 
@@ -148,3 +175,4 @@ Load on demand — read the relevant document only when encountering a specific 
 - [Telemetry Identification & Removal](./references/telemetry.md) — Identification framework for telemetry components (keyword patterns + behavioral traits) + known vendor cases + three-layer disable templates
 - [Suspicious Service Checklist](./references/suspicious-checklist.md) — Quantified risk scoring system (12 signals) + investigation workflow + decision matrix + false positive exclusion
 - [PowerShell & sc.exe Gotchas](./references/sc-gotchas.md) — Common AI-generated PowerShell errors (`&&`, comparison operators, array unwrapping, etc.) + sc.exe-specific pitfalls + self-check list
+- [Software Uninstall Guide](./references/uninstall-guide.md) — Decision framework for software removal + removal strategies (winget/MSI/native) + 6-area leftover cleanup checklist + bloatware patterns + edge cases (kernel drivers, UWP, anti-uninstall software)

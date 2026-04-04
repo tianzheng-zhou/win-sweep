@@ -20,6 +20,29 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
     [Security.Principal.WindowsBuiltInRole]::Administrator
 )
 
+if (-not $isAdmin) {
+    Write-Host "`n" -NoNewline
+    Write-Host ('!' * 60) -ForegroundColor Red
+    Write-Host ' WARNING: Running WITHOUT Administrator privileges' -ForegroundColor Red
+    Write-Host ('!' * 60) -ForegroundColor Red
+    Write-Host @"
+
+  The following information will be INCOMPLETE or MISSING:
+    - Service binary paths and startup accounts
+    - HKLM startup items
+    - Scheduled task internal details
+    - Signature verification for some executables
+    - Full memory usage for system processes
+
+  For a complete diagnosis, restart your tool as Administrator.
+  (Right-click the app icon -> Run as administrator)
+
+  Proceeding with partial results...
+"@ -ForegroundColor Yellow
+    Write-Host ('!' * 60) -ForegroundColor Red
+    Write-Host ''
+}
+
 function Write-Section([string]$Title) {
     Write-Host "`n$('=' * 60)" -ForegroundColor Cyan
     Write-Host " $Title" -ForegroundColor Cyan

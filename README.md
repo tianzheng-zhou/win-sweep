@@ -1,6 +1,6 @@
 # win-sweep
 
-[中文](README.zh-CN.md) | English
+[简体中文](README.zh-CN.md) | English
 
 **Windows sluggish again? Boot spinner going for 30 seconds? Fan screaming for no reason?**
 
@@ -31,6 +31,7 @@ Works with any AI coding tool that has a terminal: VS Code Copilot, Claude Code,
 | **Startup Management** | Disable startup items with backup to `RunDisabled` (recoverable anytime) | `manage-startups.ps1` |
 | **Telemetry Sweep** | Three-layer cross-check: services + tasks + startup items — prevent mutual re-activation | `clean-tasks.ps1` |
 | **Suspicious Service Scan** | 12-signal quantified risk scoring to catch leftover/unsigned/unknown services | `detect-suspicious.ps1` |
+| **Software Uninstall & Cleanup** | Uninstall programs via winget or native uninstaller, then scan 6 areas for leftovers (services, tasks, startup items, directories, registry, temp files) and clean them up | `uninstall-software.ps1` |
 | **Change Verification** | Auto-verify each change took effect, compare before/after | `verify.ps1` |
 
 ### Highlights
@@ -39,6 +40,7 @@ Works with any AI coding tool that has a terminal: VS Code Copilot, Claude Code,
 - **Framework, not a list** — Built on universal decision logic; can analyze unknown services without relying on hardcoded lists
 - **Three-layer telemetry kill** — Disabling just the service is useless (scheduled tasks will re-enable it); must disable services + tasks + startup items together
 - **Reversible by design** — Startup items are backed up not deleted, services default to Manual not Disabled, high-risk ops get registry export first
+- **Strong uninstall** — Not just running the uninstaller: winget-first strategy, then scan 6 types of leftovers (orphaned services, tasks, startup items, directories, registry entries, temp files) for thorough removal
 - **Zero dependencies** — Pure PowerShell 5.1, built into Windows 10/11, no third-party installs
 
 ## Quick Start
@@ -117,14 +119,18 @@ Describe your problem to the AI:
 > Are there any auto-start services I can turn off?
 > Scan for telemetry components and disable them all
 > Check for suspicious leftover services
+> Uninstall Adobe Flash and clean up all its leftovers
+> Help me remove bloatware I don't need
 > My C: drive is almost full, see what's taking up space
 ```
 
 The AI will invoke the appropriate script, analyze results, and present recommendations for your approval.
 
-### 3. Administrator Privileges (Optional)
+### 3. Administrator Privileges
 
-Diagnostic scans don't need admin. But modifying services, scheduled tasks, etc. requires elevation.
+Admin privileges affect **both diagnosis and modification**.
+
+**Without admin, diagnostic results are incomplete** — service binary paths, HKLM startup items, scheduled task details, and signature checks may be missing or inaccurate. The AI will proactively warn you about what's missing.
 
 **Method: Launch your AI tool as Administrator — internal commands automatically inherit the privileges.**
 
@@ -133,20 +139,22 @@ Diagnostic scans don't need admin. But modifying services, scheduled tasks, etc.
 | VS Code / Cursor / Windsurf | Right-click the app icon → Run as administrator |
 | Terminal-based (Claude Code / Codex CLI / Gemini CLI, etc.) | Open an admin terminal first, then launch the tool |
 
-> Works without elevation too — the AI will proactively warn about insufficient permissions instead of just failing.
+> Works without elevation too — the AI will warn you about incomplete results and let you decide whether to proceed.
 
 <details>
 <summary>Permission requirements by operation</summary>
 
-| Operation | Needs Admin |
-|-----------|------------|
-| System diagnostics | Partial (service details need it) |
-| Service optimization | Yes |
-| HKCU startup items | No |
-| HKLM startup items | Yes |
-| Scheduled task cleanup | Yes |
-| Suspicious service detection | Yes |
-| Change verification | Partial |
+| Operation | Needs Admin | What's Missing Without Admin |
+|-----------|------------|-----------------------------|
+| System diagnostics | **Recommended** | Service binary paths, startup accounts, some process details incomplete |
+| Service optimization | Yes | Will fail |
+| HKCU startup items | No | — |
+| HKLM startup items | Yes | Cannot read or modify |
+| Scheduled task cleanup | Yes | Will fail |
+| Software uninstall | Partial (HKCU apps no; HKLM apps yes) | System-level apps cannot be uninstalled |
+| Software leftover cleanup | Yes | Cannot clean services, HKLM registry, Program Files |
+| Suspicious service detection | Yes | Signature checks and service details incomplete |
+| Change verification | Partial | Some checks will be skipped |
 
 </details>
 
@@ -178,11 +186,13 @@ win-sweep/
 │   ├── manage-startups.ps1     # Startup item disable/restore
 │   ├── clean-tasks.ps1         # Scheduled task scan & disable
 │   ├── detect-suspicious.ps1   # Suspicious service risk scoring
+│   ├── uninstall-software.ps1  # Software uninstall & leftover cleanup
 │   └── verify.ps1              # Change verification & before/after comparison
 └── references/                 # AI reference docs (loaded on demand)
     ├── service-rules.md        # Service decision framework
     ├── telemetry.md            # Telemetry identification & three-layer disable
     ├── suspicious-checklist.md # 12-signal risk scoring system
+    ├── uninstall-guide.md      # Software removal decision framework & leftover cleanup
     └── sc-gotchas.md           # sc.exe / PowerShell common gotchas
 ```
 
