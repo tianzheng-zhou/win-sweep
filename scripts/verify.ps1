@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    WinSweep 变更验证 — 确认优化变更已正确生效。
+    win-sweep 变更验证 — 确认优化变更已正确生效。
 .DESCRIPTION
     重新扫描服务、启动项和计划任务，验证预期变更是否生效。
     对比前后差异。

@@ -2,7 +2,7 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    WinSweep 服务优化 — 批量修改服务启动模式。
+    win-sweep 服务优化 — 批量修改服务启动模式。
 .DESCRIPTION
     根据预定义规则，将不必要的 Auto 服务改为 Manual 或 Disabled。
     修改前会导出当前配置作为备份。

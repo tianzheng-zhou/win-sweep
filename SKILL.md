@@ -1,9 +1,10 @@
 ---
-name: winsweep
+name: win-sweep
 description: "Windows 系统清理与优化工具包。Use when: Windows cleanup, 系统清理, 禁用服务, 禁用启动项, 开机加速, 磁盘空间释放, 卸载残留清理, 遥测服务移除, 可疑服务检测, 计划任务清理, 服务审计, 启动项审计, disable services, disable startup items, reduce boot time, free disk space, telemetry removal, suspicious service detection, scheduled task cleanup"
+license: MIT
 ---
 
-# WinSweep — Windows 系统清理与优化
+# win-sweep — Windows 系统清理与优化
 
 诊断和清理 Windows 系统膨胀问题的技能：冗余服务、启动项、计划任务、磁盘空间占用、可疑进程。
 
@@ -41,6 +42,15 @@ description: "Windows 系统清理与优化工具包。Use when: Windows cleanup
 2. 重启后重新运行诊断，对比前后差异
 
 ## 核心原则
+
+- **操作前必须确认（铁律）** — 任何对系统的写入操作（修改服务、删除启动项、禁用计划任务等）**必须先向用户报告并获得明确确认**，禁止静默执行。报告内容必须包含：
+  1. **这是什么** — 该服务/启动项/任务的用途，属于哪个软件
+  2. **当前状态** — 现在是什么启动模式、是否正在运行
+  3. **建议操作** — 改为 Manual / Disabled / 删除，以及为什么
+  4. **操作后果** — 修改后会发生什么，哪些功能可能受影响，是否可恢复
+  5. **风险等级** — 低（纯冗余）/ 中（可能影响特定软件）/ 高（影响系统功能）
+  
+  只有在用户明确回复"确认"、"好的"、"执行"等肯定语后，才可以执行操作。**诊断（只读）操作不需要确认，修改操作必须确认。**
 
 - **优先 Manual 而非 Disabled** — 用 `start= demand` 而非 `start= disabled`，Windows 会在需要时自动拉起 Manual 服务
 - **先备份再修改** — 启动项移到 `RunDisabled` 而非直接删除；修改服务前先导出配置

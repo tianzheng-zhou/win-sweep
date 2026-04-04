@@ -1,10 +1,18 @@
-# WinSweep
+# win-sweep
 
 一个 VS Code Copilot Skill，用于 Windows 系统清理与优化。
 
+> **⚠️ 风险警告**
+>
+> 本工具通过 AI 辅助修改 Windows 系统配置（服务、启动项、计划任务等）。**系统配置修改具有固有风险**，错误的操作可能导致软件无法运行、系统不稳定甚至无法启动。
+>
+> - 本工具已内置安全机制：**AI 在执行任何修改操作前，必须先向你报告操作内容和后果，并等待你明确确认后才会执行**。请务必仔细阅读 AI 的报告后再做决定。
+> - 尽管如此，**你需要自行判断是否接受每一项修改**。作者对因使用本工具导致的任何系统损坏、数据丢失或其他问题**不承担任何责任**。
+> - 建议在操作前创建系统还原点。
+
 ## 功能
 
-WinSweep 通过 PowerShell 脚本诊断和清理 Windows 系统膨胀：
+win-sweep 通过 PowerShell 脚本诊断和清理 Windows 系统膨胀：
 
 - **系统诊断** — 扫描磁盘用量、已安装软件、启动项、服务、计划任务
 - **服务优化** — 批量将不必要的 Auto 服务改为 Manual/Disabled
@@ -17,13 +25,13 @@ WinSweep 通过 PowerShell 脚本诊断和清理 Windows 系统膨胀：
 复制此文件夹到 Copilot 技能目录：
 
 ```
-~/.copilot/skills/winsweep/
+~/.copilot/skills/win-sweep/
 ```
 
 或克隆到项目中：
 
 ```
-.github/skills/winsweep/
+.github/skills/win-sweep/
 ```
 
 ## 使用
@@ -33,7 +41,7 @@ WinSweep 通过 PowerShell 脚本诊断和清理 Windows 系统膨胀：
 也可以直接调用：
 
 ```
-/winsweep
+/win-sweep
 ```
 
 ## 环境要求
@@ -45,7 +53,7 @@ WinSweep 通过 PowerShell 脚本诊断和清理 Windows 系统膨胀：
 ## 项目结构
 
 ```
-WinSweep/
+win-sweep/
 ├── SKILL.md              # 技能定义（Copilot 读取此文件）
 ├── README.md             # 本文件
 ├── LICENSE               # MIT
@@ -64,6 +72,17 @@ WinSweep/
 └── docs/                 # 本地笔记（不上传）
     └── .local/
 ```
+
+## 安全机制
+
+- **操作前确认** — AI 在修改任何系统配置前，会先报告该项目的用途、当前状态、建议操作、操作后果和风险等级，等你确认后才执行
+- **只读诊断安全** — 诊断扫描不修改系统，可放心运行
+- **可恢复设计** — 启动项移到 `RunDisabled` 备份而非直接删除；服务改为 Manual（按需启动）而非 Disabled
+- **建议操作前创建系统还原点**
+
+## 免责声明
+
+本工具按"原样"提供，不附带任何明示或暗示的保证。作者不对因使用本工具而导致的任何直接或间接损失（包括但不限于系统损坏、数据丢失、软件无法运行）承担责任。用户应自行评估风险并决定是否执行每一项操作。
 
 ## 许可证
 

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    WinSweep 系统诊断 — 扫描并报告系统状态。
+    win-sweep 系统诊断 — 扫描并报告系统状态。
 .DESCRIPTION
     收集磁盘用量、已安装软件、启动项、服务、
     计划任务、内存占用排行等信息，输出结构化报告。

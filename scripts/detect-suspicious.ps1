@@ -2,7 +2,7 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    WinSweep 可疑服务检测 — 查找残留/未签名的服务。
+    win-sweep 可疑服务检测 — 查找残留/未签名的服务。
 .DESCRIPTION
     扫描所有已注册服务，查找可疑迹象：可执行文件丢失、
     无数字签名、高权限账户 + 失败自动重启、乱码服务名等。

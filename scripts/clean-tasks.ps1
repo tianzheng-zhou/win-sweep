@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    WinSweep 计划任务清理 — 禁用不必要的计划任务。
+    win-sweep 计划任务清理 — 禁用不必要的计划任务。
 .DESCRIPTION
     识别并禁用非微软的遥测、更新检查等不必要的计划任务。
     特别关注绕过服务禁用的任务（如 Intel esrv.exe）。
