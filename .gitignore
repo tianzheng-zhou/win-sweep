@@ -1,1 +1,10 @@
+# Local notes (private reference material)
 docs/.local/
+
+# Script output / reports
+reports/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
