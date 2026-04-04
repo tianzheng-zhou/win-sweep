@@ -35,7 +35,13 @@ When encountering an Auto-start service, evaluate in this order:
    → Yes: Recommend Disabled or deletion
    → No: Continue
 
-5. Is it for on-demand software (not needed constantly)?
+5. What is the service's actual purpose? Does the user actively need it?
+   → Game anti-cheat / game platform / game companion service the user only uses occasionally: Recommend Manual
+   → Third-party app background service (cloud sync, helper, tray agent) not needed at all times: Recommend Manual
+   → User cannot identify the service's purpose: Investigate further (check executable path, publisher, description) before deciding
+   → Continue
+
+6. Is it for on-demand software (not needed constantly)?
    → Yes: Recommend Manual
    → No: Keep Auto
 ```
@@ -111,6 +117,20 @@ These are **universal patterns** applicable to any system. The AI should match d
 **Traits**: Service name contains `Search`, `Index`, or third-party search tools
 **Examples**: WSearch (Windows Search), Everything, Listary
 **Judgment**: On SSD systems, setting WSearch to Manual has minimal impact; on HDD systems, keep Auto if search functionality is relied upon
+
+### Pattern 9: Game Platform & Anti-Cheat Services
+**Traits**: Service name or executable path relates to game platforms, game launchers, or anti-cheat engines. Common keywords: `EasyAntiCheat`, `BEService` (BattlEye), `vgc` (Vanguard), `FaceIt`, `Steam`, `Epic`, `Riot`, `Garena`, `GameBar`, `XboxGip`, `nProtect`, `GameGuard`
+**Rationale**: Anti-cheat and game platform services are set to Auto by default but only need to run while the game is active. Some anti-cheat services (Vanguard, EasyAntiCheat) run kernel-level drivers at boot even when the game is not open — this is a significant resource and security surface cost for occasional gamers
+**Examples**: EasyAntiCheat, BEService, vgc (Riot Vanguard), vgk (Vanguard kernel driver), Steam Client Service, EpicOnlineServices, nProtect GameGuard
+**Judgment**: If the user plays the game regularly (daily), keep Auto. If played occasionally, set to Manual — the game launcher will start the service when needed. For kernel-level anti-cheat (vgc/vgk), inform the user that a reboot may be required after the service starts before the game can launch
+**Note**: Some competitive games refuse to launch unless the anti-cheat service has been running since boot. Always inform the user of this trade-off when recommending Manual
+
+### Pattern 10: Third-Party App Background / Companion Services
+**Traits**: Services installed by user applications that run persistently in the background for convenience features (cloud sync agents, app helper processes, tray utilities, crash reporters). Common keywords: `Helper`, `Agent`, `Companion`, `Tray`, `Monitor`, `CrashReport`, `Sync`
+**Rationale**: Many desktop apps (note-taking tools, messaging apps, download managers, creative suites) register always-on services for features like instant sync, quick launch, or background notifications. These are rarely essential at boot — the app will start the service when opened
+**Examples**: Dropbox service, OneDrive helper services (beyond the core sync), Evernote Clipper, Discord update helper, Spotify Web Helper, CCleaner Monitoring, iCloud services, Razer Synapse service, Logitech G Hub, Nahimic service, Realtek audio companion services
+**Judgment**: Evaluate whether the user relies on the background functionality (e.g., real-time cloud sync). If the user only uses the app interactively, recommend Manual. If the service is a crash reporter or usage monitor with no user-facing benefit, recommend Disabled
+**Note**: Some companion services share names with their parent app — verify by checking the executable path and service description to distinguish core functionality from optional background helpers
 
 ---
 

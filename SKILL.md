@@ -1,6 +1,6 @@
 ---
 name: win-sweep
-description: "Windows system cleanup and optimization toolkit. Use when: Windows cleanup, 系统清理, disable services, disable startup items, reduce boot time, free disk space, uninstall leftovers, telemetry removal, suspicious service detection, scheduled task cleanup, service audit, startup audit, 禁用服务, 禁用启动项, 开机加速, 磁盘空间释放, 卸载残留清理, 遥测服务移除, 可疑服务检测, 计划任务清理, 服务审计, 启动项审计"
+description: "Windows system cleanup and optimization toolkit. Use when: Windows cleanup, 系统清理, 电脑太慢, 开机慢, 开机加速, C盘满了, 清理磁盘, 释放空间, 关掉没用的后台程序, 关闭开机自启, 卸载残留清理, 删掉偷偷上传数据的东西, 检查可疑进程, 清理没用的定时任务, disable services, disable startup items, reduce boot time, free disk space, uninstall leftovers, telemetry removal, suspicious service detection, scheduled task cleanup"
 license: MIT
 ---
 
@@ -132,6 +132,7 @@ This enables post-hoc auditing and troubleshooting.
 - **Prefer Manual over Disabled** — `start= demand` lets Windows start the service on demand; `start= disabled` completely prevents startup. Use Manual unless the service is telemetry or a discontinued product
 - **Back up before modifying** — Move startup items to `RunDisabled` instead of deleting; `reg export` before deleting services
 - **Three-layer telemetry sweep** — Must check services + scheduled tasks + startup items simultaneously; disabling only one layer is ineffective (see [telemetry.md](./references/telemetry.md))
+- **Check what the service actually does** — Many games and third-party apps silently install always-on services (anti-cheat engines, game platform launchers, companion apps). During diagnosis, identify each service's actual purpose and whether it genuinely needs to run at boot. If the user only plays a game occasionally, its background service doesn't need to be Auto (see Pattern 9 & 10 in [service-rules.md](./references/service-rules.md))
 - **Decision framework over hardcoded lists** — Reference docs provide universal identification patterns, not hardcoded service name lists. Apply the framework to unknown services rather than only matching known lists
 - **Administrator privileges required** — Most modification operations require an elevated PowerShell session. If the current terminal is not elevated, detect and notify the user first. Detection:
   ```powershell
