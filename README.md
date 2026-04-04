@@ -31,7 +31,7 @@ Works with any AI coding tool that has a terminal: VS Code Copilot, Claude Code,
 | **Startup Management** | Disable startup items with backup to `RunDisabled` (recoverable anytime) | `manage-startups.ps1` |
 | **Telemetry Sweep** | Three-layer cross-check: services + tasks + startup items — prevent mutual re-activation | `clean-tasks.ps1` |
 | **Suspicious Service Scan** | 12-signal quantified risk scoring to catch leftover/unsigned/unknown services | `detect-suspicious.ps1` |
-| **Software Uninstall & Cleanup** | Uninstall programs via winget or native uninstaller, then scan 6 areas for leftovers (services, tasks, startup items, directories, registry, temp files) and clean them up | `uninstall-software.ps1` |
+| **Software Removal & Cleanup** | Scan installed software and recommend removals; after user uninstalls manually via Settings/Control Panel, scan 6 areas for leftovers (services, tasks, startup items, directories, registry, temp files) and clean them up. Terminal-only uninstall supported for winget/MSI packages with timeout protection | `uninstall-software.ps1` |
 | **Change Verification** | Auto-verify each change took effect, compare before/after | `verify.ps1` |
 
 ### Highlights
@@ -40,7 +40,7 @@ Works with any AI coding tool that has a terminal: VS Code Copilot, Claude Code,
 - **Framework, not a list** — Built on universal decision logic; can analyze unknown services without relying on hardcoded lists
 - **Three-layer telemetry kill** — Disabling just the service is useless (scheduled tasks will re-enable it); must disable services + tasks + startup items together
 - **Reversible by design** — Startup items are backed up not deleted, services default to Manual not Disabled, high-risk ops get registry export first
-- **Strong uninstall** — Not just running the uninstaller: winget-first strategy, then scan 6 types of leftovers (orphaned services, tasks, startup items, directories, registry entries, temp files) for thorough removal
+- **Strong uninstall** — AI diagnoses what to remove, you uninstall via Settings/Control Panel, then AI sweeps 6 types of leftovers. For winget/MSI software, terminal uninstall is available with timeout protection. Force-delete only as absolute last resort in Safe Mode
 - **Zero dependencies** — Pure PowerShell 5.1, built into Windows 10/11, no third-party installs
 
 ## Quick Start

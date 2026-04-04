@@ -35,7 +35,55 @@ Execute targeted fixes based on diagnostic results. **All modification operation
 2. [Startup Management](./scripts/manage-startups.ps1) — Disable startup items with backup to `RunDisabled` registry key
 3. [Scheduled Task Cleanup](./scripts/clean-tasks.ps1) — Disable unnecessary scheduled tasks
 4. [Suspicious Service Detection](./scripts/detect-suspicious.ps1) — Find leftover/unsigned/suspicious services
-5. [Software Uninstall & Cleanup](./scripts/uninstall-software.ps1) — Uninstall programs via winget/native uninstaller, then scan and remove leftover services, tasks, startup items, directories, and registry entries
+5. **Software Removal** (three-step workflow — see details below):
+   - a. [List & Recommend](./scripts/uninstall-software.ps1) (`-Action List`) — Generate a "recommended uninstall list" from diagnostic results
+   - b. **User manually uninstalls** via Settings > Apps or Control Panel — **the AI cannot reliably uninstall software from the terminal** (see "Terminal Uninstall Limitations" below)
+   - c. [Leftover Cleanup](./scripts/uninstall-software.ps1) (`-Action Cleanup`) — After user confirms manual uninstall is done, scan 6 areas for residuals and clean them up
+
+#### Terminal Uninstall Limitations
+
+**The terminal is NOT reliable for uninstalling software, especially rogue/bloatware.** The AI must understand these limitations:
+
+1. **GUI-only uninstallers** — Most Chinese rogue software (360, 鲁大师, 2345, etc.) and many Western bloatware products have GUI-only uninstallers with no silent/quiet mode. Running them from terminal opens a GUI wizard that blocks the terminal indefinitely.
+2. **Guardian processes** — Rogue software uses guardian processes that respawn each other. `taskkill` alone cannot kill them all in time — they revive before you finish.
+3. **Kernel driver locks** — Software like 360 (`ZhuDongFangYu`), anti-cheat engines, and some AV products use kernel drivers that lock files and registry keys. Even Administrator privileges cannot bypass these locks while the driver is loaded.
+4. **Process file locks** — Running processes hold file locks; you cannot delete directories while the software is active.
+5. **Skipped cleanup steps** — Force-deleting files bypasses the uninstaller's driver removal, COM de-registration, file association cleanup, and other hooks — leaving *more* residuals than a proper uninstall.
+6. **Uninstaller hangs** — Some uninstallers hang indefinitely waiting for user input, a background service, or a reboot prompt — freezing the terminal.
+
+**Correct workflow when the user asks to "uninstall" or "remove" software:**
+
+```
+AI: I've identified these programs for removal:
+    | # | Software        | Size  | Why Remove            |
+    | 1 | 鲁大师          | 230MB | Rogue software (360 ecosystem) |
+    | 2 | Adobe Flash     | 15MB  | Discontinued / EOL    |
+    | ...
+
+    ⚠️ Important: For reliable removal, please uninstall these
+    programs yourself through:
+      • Settings > Apps > Installed apps (Windows 11)
+      • Control Panel > Programs and Features (Windows 10)
+
+    For rogue software (鲁大师, 360, etc.), you may need to:
+      • Right-click the tray icon and exit the program first
+      • If the uninstaller is blocked, reboot into Safe Mode
+
+    After you've finished uninstalling, tell me and I'll:
+      • Scan for leftover services, scheduled tasks, startup items,
+        directories, registry entries, and temp files
+      • Clean them up with your confirmation
+```
+
+**The only case where terminal uninstall is acceptable:**
+- Simple MSI packages (`msiexec /x {GUID} /quiet`) or winget-supported software (`winget uninstall --name "..." --silent`)
+- The AI must set a **timeout** (default 120 seconds) on any `Start-Process -Wait` call to prevent indefinite hangs
+- If the process does not exit within the timeout, the AI must kill it and inform the user to uninstall manually
+
+**Force-delete is the absolute last resort**, only when:
+- The user has already tried manual uninstall and it failed
+- Preferably executed in Safe Mode
+- The AI must warn that force-delete may leave more residuals than a proper uninstall
 
 ### Phase 3: Verification (Safe — No Confirmation Needed)
 

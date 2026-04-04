@@ -1,16 +1,64 @@
-# Software Uninstall & Leftover Cleanup Guide
+# Software Removal & Leftover Cleanup Guide
 
 This document provides a **decision framework** for the AI to evaluate software removal requests and ensure thorough cleanup.
-The goal is not just running the uninstaller, but eliminating all residual artifacts that accumulate over time.
+The terminal's primary value is **diagnosing what to remove** and **cleaning up leftovers after the user uninstalls manually**.
 
 ---
 
 ## Core Principles
 
-1. **Uninstaller first, manual cleanup second** — Always try the software's own uninstaller (or winget) before manually deleting files. Native uninstallers handle driver removal, COM registration, file associations, and other hooks that manual deletion misses.
-2. **winget over native when available** — `winget uninstall` often invokes the quiet/silent uninstaller with correct flags, handles edge cases, and is more scriptable.
-3. **Leftover scan is mandatory after uninstall** — Every uninstaller leaves something behind. Always run a cleanup scan after the uninstaller finishes.
-4. **Batch cleanup needs the same safety mechanisms** — Leftover deletion follows the same risk levels and confirmation flow as service optimization (see SKILL.md Safety Mechanisms).
+1. **User uninstalls manually, terminal cleans up leftovers** — The correct workflow is: terminal generates a removal recommendation → user uninstalls via Settings > Apps or Control Panel → terminal scans and cleans residuals. Terminal-based uninstall is unreliable for most software (see "Terminal Uninstall Limitations" below).
+2. **Leftover scan is the primary value** — Every uninstaller leaves something behind. The terminal excels at scanning and cleaning these residuals: orphaned services, scheduled tasks, startup items, directories, registry entries, and temp files.
+3. **Batch cleanup needs the same safety mechanisms** — Leftover deletion follows the same risk levels and confirmation flow as service optimization (see SKILL.md Safety Mechanisms).
+4. **winget is the only reliable terminal uninstaller** — When available, `winget uninstall --silent` is the only method that works consistently from the terminal. Native uninstallers frequently hang, pop up GUIs, or fail silently.
+5. **Always set a timeout** — Any `Start-Process` call for uninstall must have a timeout (default 120s). If exceeded, kill the process and instruct the user to uninstall manually.
+
+---
+
+## Terminal Uninstall Limitations
+
+**Why the terminal cannot reliably uninstall software:**
+
+| Problem | Affected Software | Impact |
+|---------|------------------|--------|
+| GUI-only uninstallers (no silent mode) | Most Chinese rogue software (360, 鲁大师, 2345), many Western bloatware | Opens a GUI wizard that blocks the terminal indefinitely |
+| Guardian processes (mutual respawning) | 360, 金山, 腾讯管家, some AV products | `taskkill` alone cannot kill them — they revive each other faster than you can kill them |
+| Kernel driver file/registry locks | 360 (ZhuDongFangYu), anti-cheat engines, some AV | Even Administrator cannot delete locked files while driver is loaded |
+| Process file locks | Any running software | Cannot delete directories while processes hold file handles |
+| Uninstaller hangs (no timeout) | Software waiting for user input, reboot prompts, background services | Terminal freezes indefinitely without timeout protection |
+| Force-delete leaves MORE residuals | All software with drivers, COM registrations, file associations | Bypasses cleanup steps the uninstaller would have performed |
+
+**The terminal IS excellent at:**
+- Diagnosing what's installed and recommending what to remove
+- Cleaning up leftovers AFTER uninstall (orphaned services, tasks, startup items, files, registry)
+- Service optimization, startup management, telemetry removal
+- Browser homepage repair
+- Suspicious service detection
+
+---
+
+## Recommended Workflow
+
+```
+Phase 1: AI runs diagnosis → generates "recommended uninstall list"
+         (terminal, fully automated)
+   ↓
+Phase 2: User uninstalls programs manually
+         (Settings > Apps, or Control Panel > Programs and Features)
+         For rogue software: exit tray icon → uninstall → reboot if needed
+         For stubborn software: Safe Mode → uninstall
+   ↓
+Phase 3: AI runs leftover cleanup scan → user confirms cleanup
+         (terminal, fully automated)
+   ↓
+Phase 4: AI runs service optimization, startup cleanup, etc.
+         (terminal, fully automated)
+```
+
+**Only attempt terminal-based uninstall when:**
+- The software is in the winget repository (`winget list --name "..."`)
+- The software is MSI-based (GUID in registry, `msiexec /x {GUID} /quiet`)
+- AND you set a timeout (default 120s) to prevent hangs
 
 ---
 
@@ -63,35 +111,47 @@ If the software has no visible entry in `Programs and Features` / `Apps & Featur
 
 ## Removal Strategies (Ordered by Preference)
 
-### Strategy 1: winget (Best)
+### Strategy 1: User Manual Uninstall (Recommended Default)
+The AI generates a recommendation list; the user uninstalls via the OS GUI.
+- **Windows 11**: Settings > Apps > Installed apps
+- **Windows 10**: Settings > Apps > Apps & features, or Control Panel > Programs and Features
+- **For rogue/stubborn software**: Right-click tray icon → exit → then uninstall. If blocked, reboot into Safe Mode.
+
+**Pros**: Most reliable — uses the vendor's intended uninstall path, handles GUI prompts, driver removal, COM de-registration.
+**The AI's role**: Diagnose → recommend → wait for user to finish → run leftover cleanup.
+
+### Strategy 2: winget (Best Terminal Option)
 ```powershell
 winget uninstall --name "Software Name" --silent --accept-source-agreements
 ```
-**Pros**: Handles silent flags, consistent behavior, scriptable.
+**Pros**: Handles silent flags, consistent behavior, reliable from terminal.
 **Cons**: Not all software is in the winget repository.
 **Check availability**: `winget list --name "Software Name"`
+**Must use timeout**: Set `-TimeoutSeconds` (default 120) when calling via the script.
 
-### Strategy 2: Native Quiet Uninstaller
-```powershell
-# From QuietUninstallString in registry
-& "C:\Program Files\Vendor\uninstall.exe" /S /silent /quiet
-```
-**Pros**: Vendor-intended removal path.
-**Cons**: Not all software provides a quiet option; flags vary wildly (`/S`, `/silent`, `/quiet`, `/VERYSILENT`, `/qn`).
-
-### Strategy 3: MSI Uninstall
+### Strategy 3: MSI Uninstall (Terminal-Safe)
 ```powershell
 msiexec.exe /x {PRODUCT-GUID} /quiet /norestart
 ```
-**Pros**: Standardized for MSI-installed software.
+**Pros**: Standardized for MSI-installed software; truly silent.
 **Cons**: Only works for MSI packages; GUID must be extracted from registry.
+**Must use timeout**: Same as above.
 
-### Strategy 4: Native Interactive Uninstaller (Fallback)
+### Strategy 4: Native Uninstaller from Terminal (Unreliable — Last Resort)
 ```powershell
-# From UninstallString in registry
-Start-Process "C:\Program Files\Vendor\uninstall.exe" -Wait
+# From UninstallString in registry — with timeout protection
+$proc = Start-Process "C:\Program Files\Vendor\uninstall.exe" -PassThru
+if (-not $proc.WaitForExit(120000)) { $proc | Stop-Process -Force }
 ```
-**Cons**: Requires user interaction; may show ads or "are you sure" dialogs.
+**Cons**: Frequently opens GUI wizards, hangs the terminal, or fails silently. Many programs have no quiet/silent mode. **Always use timeout.**
+**When it times out**: Kill the process and tell the user to uninstall manually (Strategy 1).
+
+### Strategy 5: Force-Delete (Absolute Last Resort)
+Only when:
+- User has already tried manual uninstall (Strategy 1) and it failed
+- Preferably in Safe Mode
+- **Must warn the user**: force-delete bypasses driver removal, COM de-registration, file association cleanup → may leave MORE residuals than a proper uninstall
+- Always run Cleanup after force-delete to catch what was missed
 
 ---
 

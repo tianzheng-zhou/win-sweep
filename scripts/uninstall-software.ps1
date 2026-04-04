@@ -1,14 +1,17 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    win-sweep software uninstall — remove programs and clean up leftovers.
+    win-sweep software removal — list candidates, attempt uninstall, and clean up leftovers.
 .DESCRIPTION
     Three modes of operation:
-    - List: Scan installed software from registry (same as diagnose, but focused view).
-    - Uninstall: Invoke the native uninstaller for specified programs. Supports both
-      interactive (UninstallString) and quiet (QuietUninstallString) modes.
-    - Cleanup: After uninstall, scan for leftover artifacts — orphaned services,
-      scheduled tasks, startup items, program directories, and AppData folders.
+    - List: Scan installed software from registry, generate a "recommended uninstall list."
+    - Uninstall: Attempt to invoke the uninstaller from the terminal. WARNING: This is unreliable
+      for many programs (GUI-only uninstallers, guardian processes, kernel driver locks). The
+      preferred workflow is: List → user manually uninstalls via Settings/Control Panel → Cleanup.
+      Includes timeout protection to prevent indefinite hangs.
+    - Cleanup: After uninstall (manual or automated), scan for leftover artifacts — orphaned
+      services, scheduled tasks, startup items, program directories, and AppData folders.
+      This is the primary value of this script.
 .PARAMETER Action
     Operation mode: List, Uninstall, or Cleanup.
 .PARAMETER Programs
@@ -17,6 +20,10 @@
     Example: '[{"Name":"Bonjour"},{"Name":"Adobe Flash"}]'
 .PARAMETER Quiet
     Attempt quiet/silent uninstall when available.
+.PARAMETER TimeoutSeconds
+    Maximum seconds to wait for each uninstaller process (default: 120).
+    If the uninstaller does not exit within this time, it will be killed.
+    This prevents GUI uninstallers and hung processes from freezing the terminal.
 .PARAMETER CleanupTarget
     For Cleanup action: the software name(s) to scan leftovers for.
     Example: 'Adobe Flash','Bonjour'
@@ -24,8 +31,12 @@
     For Cleanup action: skip running the uninstaller, only scan and remove leftovers.
     Useful when the software has already been uninstalled but left residue behind.
 .NOTES
-    Uninstall operations may require admin privileges depending on the software.
-    Cleanup of HKLM registry keys and Program Files directories requires admin.
+    ⚠️ IMPORTANT: Terminal-based uninstall is unreliable for many programs, especially:
+    - Chinese rogue software (360, 鲁大师, 2345, etc.) — GUI-only, guardian processes, kernel locks
+    - Bloated AV products (McAfee, Norton, Avast) — require vendor-specific removal tools
+    - Any software with no silent/quiet uninstall mode
+    The recommended workflow is to use List + Cleanup, with the user doing the actual
+    uninstall manually through Settings > Apps or Control Panel.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -36,6 +47,9 @@ param(
     [string]$Programs,
 
     [switch]$Quiet,
+
+    [ValidateRange(10, 600)]
+    [int]$TimeoutSeconds = 120,
 
     [string[]]$CleanupTarget,
 
@@ -104,6 +118,22 @@ switch ($Action) {
     }
 
     'Uninstall' {
+        Write-Host "`n" -NoNewline
+        Write-Host ('!' * 60) -ForegroundColor Yellow
+        Write-Host ' WARNING: Terminal-based uninstall has significant limitations' -ForegroundColor Yellow
+        Write-Host ('!' * 60) -ForegroundColor Yellow
+        Write-Host @"
+
+  Many programs (especially rogue software) have GUI-only uninstallers
+  that will hang the terminal or fail silently. The recommended workflow:
+    1. Use this script's List mode to identify what to remove
+    2. Uninstall manually via Settings > Apps or Control Panel
+    3. Use this script's Cleanup mode to remove leftovers
+
+  Proceeding with terminal uninstall (timeout: $TimeoutSeconds seconds per program)...
+
+"@ -ForegroundColor Yellow
+
         if (-not $Programs) {
             Write-Error "Uninstall action requires the -Programs parameter (JSON array)."
             exit 1
@@ -137,7 +167,7 @@ switch ($Action) {
             $entries = Find-SoftwareEntry $name
             if (-not $entries) {
                 Write-Host "  [SKIP] '$name' — not found in registry" -ForegroundColor DarkYellow
-                $results += [PSCustomObject]@{ Name=$name; Status='NotFound' }
+                $results += [PSCustomObject]@{ Name=$name; Status='NotFound'; Method='N/A' }
                 continue
             }
 
@@ -157,28 +187,36 @@ switch ($Action) {
 
             Write-Host "  Found: $($entries.DisplayName) v$($entries.DisplayVersion)" -ForegroundColor White
 
-            # Strategy 1: Try winget first (cleanest)
+            # Strategy 1: Try winget first (cleanest and most reliable from terminal)
             $uninstalled = $false
             if ($wingetAvailable) {
-                Write-Host "  Attempting winget uninstall..." -ForegroundColor Gray
+                Write-Host "  Attempting winget uninstall (timeout: ${TimeoutSeconds}s)..." -ForegroundColor Gray
                 try {
                     $wingetArgs = @('uninstall', '--name', $entries.DisplayName, '--accept-source-agreements')
                     if ($Quiet) { $wingetArgs += '--silent' }
 
-                    $wingetResult = & winget @wingetArgs 2>&1 | Out-String
-                    if ($LASTEXITCODE -eq 0) {
+                    $proc = Start-Process winget -ArgumentList ($wingetArgs -join ' ') -PassThru -NoNewWindow -ErrorAction Stop
+                    $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
+
+                    if (-not $exited) {
+                        Write-Host "  [TIMEOUT] winget did not finish within ${TimeoutSeconds}s — killing process" -ForegroundColor Red
+                        $proc | Stop-Process -Force -ErrorAction SilentlyContinue
+                        Write-Host "  [INFO] Please uninstall '$($entries.DisplayName)' manually via Settings > Apps" -ForegroundColor Yellow
+                        $results += [PSCustomObject]@{ Name=$entries.DisplayName; Status='Timeout'; Method='winget' }
+                        continue
+                    } elseif ($proc.ExitCode -eq 0) {
                         Write-Host "  [OK] Uninstalled via winget" -ForegroundColor Green
                         $uninstalled = $true
                         $results += [PSCustomObject]@{ Name=$entries.DisplayName; Status='Uninstalled'; Method='winget' }
                     } else {
-                        Write-Host "  [INFO] winget failed, falling back to native uninstaller" -ForegroundColor DarkYellow
+                        Write-Host "  [INFO] winget failed (exit code: $($proc.ExitCode)), falling back to native uninstaller" -ForegroundColor DarkYellow
                     }
                 } catch {
                     Write-Host "  [INFO] winget error, falling back to native uninstaller" -ForegroundColor DarkYellow
                 }
             }
 
-            # Strategy 2: Native uninstaller
+            # Strategy 2: Native uninstaller (with timeout protection)
             if (-not $uninstalled) {
                 $uninstallCmd = if ($Quiet -and $entries.QuietUninstallString) {
                     $entries.QuietUninstallString
@@ -188,13 +226,15 @@ switch ($Action) {
 
                 if (-not $uninstallCmd) {
                     Write-Host "  [FAIL] No uninstall command found in registry" -ForegroundColor Red
-                    $results += [PSCustomObject]@{ Name=$entries.DisplayName; Status='NoUninstaller' }
+                    Write-Host "  [INFO] Please uninstall '$($entries.DisplayName)' manually via Settings > Apps" -ForegroundColor Yellow
+                    $results += [PSCustomObject]@{ Name=$entries.DisplayName; Status='NoUninstaller'; Method='N/A' }
                     continue
                 }
 
-                Write-Host "  Running: $uninstallCmd" -ForegroundColor Gray
+                Write-Host "  Running: $uninstallCmd (timeout: ${TimeoutSeconds}s)" -ForegroundColor Gray
 
                 try {
+                    $proc = $null
                     # Parse the uninstall command — handle both EXE and MsiExec
                     if ($uninstallCmd -match 'MsiExec') {
                         # MSI-based uninstall
@@ -202,14 +242,26 @@ switch ($Action) {
                         if ($Quiet -and $msiArgs -notmatch '/quiet|/qn') {
                             $msiArgs = "$msiArgs /quiet /norestart"
                         }
-                        Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -ErrorAction Stop
+                        $proc = Start-Process msiexec.exe -ArgumentList $msiArgs -PassThru -ErrorAction Stop
                     } else {
                         # EXE-based uninstall
-                        Start-Process cmd.exe -ArgumentList "/c `"$uninstallCmd`"" -Wait -ErrorAction Stop
+                        $proc = Start-Process cmd.exe -ArgumentList "/c `"$uninstallCmd`"" -PassThru -ErrorAction Stop
+                    }
+
+                    $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
+
+                    if (-not $exited) {
+                        Write-Host "  [TIMEOUT] Uninstaller did not finish within ${TimeoutSeconds}s — killing process" -ForegroundColor Red
+                        $proc | Stop-Process -Force -ErrorAction SilentlyContinue
+                        Write-Host "  [INFO] This program likely has a GUI uninstaller that cannot run from the terminal." -ForegroundColor Yellow
+                        Write-Host "  [INFO] Please uninstall '$($entries.DisplayName)' manually:" -ForegroundColor Yellow
+                        Write-Host "         Settings > Apps > Installed apps (Windows 11)" -ForegroundColor Yellow
+                        Write-Host "         Control Panel > Programs and Features (Windows 10)" -ForegroundColor Yellow
+                        $results += [PSCustomObject]@{ Name=$entries.DisplayName; Status='Timeout-ManualRequired'; Method='Native' }
+                        continue
                     }
 
                     # Verify removal
-                    Start-Sleep -Milliseconds 500
                     $stillExists = Find-SoftwareEntry $entries.DisplayName
                     if (-not $stillExists) {
                         Write-Host "  [OK] Uninstalled successfully" -ForegroundColor Green
@@ -220,6 +272,7 @@ switch ($Action) {
                     }
                 } catch {
                     Write-Host "  [FAIL] Uninstall error: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host "  [INFO] Please uninstall '$($entries.DisplayName)' manually via Settings > Apps" -ForegroundColor Yellow
                     $results += [PSCustomObject]@{ Name=$entries.DisplayName; Status='Error'; Method='Native' }
                 }
             }
@@ -228,6 +281,15 @@ switch ($Action) {
         # Summary
         Write-Host "`n─── Uninstall Summary ───" -ForegroundColor Cyan
         $results | Format-Table -AutoSize
+
+        # Post-summary advice
+        $failedOrTimeout = $results | Where-Object { $_.Status -match 'Timeout|Error|NoUninstaller|ManualRequired' }
+        if ($failedOrTimeout) {
+            Write-Host "Some programs could not be uninstalled from the terminal." -ForegroundColor Yellow
+            Write-Host "Please uninstall them manually, then run:" -ForegroundColor Yellow
+            Write-Host "  .\uninstall-software.ps1 -Action Cleanup -CleanupTarget 'Name1','Name2'" -ForegroundColor White
+            Write-Host "to clean up any leftovers.`n" -ForegroundColor Yellow
+        }
     }
 
     'Cleanup' {
