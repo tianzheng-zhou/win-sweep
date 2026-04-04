@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     win-sweep 计划任务清理 — 列出或禁用不必要的计划任务。

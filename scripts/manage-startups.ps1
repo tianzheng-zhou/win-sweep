@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     win-sweep 启动项管理 — 禁用启动项并安全备份。
