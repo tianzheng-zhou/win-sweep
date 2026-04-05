@@ -157,7 +157,7 @@ Only when:
 
 ## Leftover Cleanup Checklist
 
-After the uninstaller completes, scan these 6 areas:
+After the uninstaller completes, scan these 9 areas:
 
 ### 1. Registry Uninstall Entries
 - `HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*`
@@ -205,6 +205,35 @@ Some applications store settings in their own registry hives:
 - `HKLM:\Software\Vendor\`
 
 These are low priority — they don't cause performance impact. Only clean if the user wants a truly thorough removal.
+
+### 7. Invalid Desktop Shortcuts
+After uninstalling software, dead `.lnk` files often remain on the Desktop (both per-user and Public Desktop). These point to executables that no longer exist.
+
+Scan paths:
+- `[Environment]::GetFolderPath('Desktop')` — current user's desktop
+- `[Environment]::GetFolderPath('CommonDesktopDirectory')` — Public desktop (shared by all users)
+
+Use `WScript.Shell` COM object to resolve the shortcut's `TargetPath` and check `Test-Path`. If the target is missing, the shortcut is dead → safe to delete.
+
+### 8. Invalid Taskbar Pinned Items
+Pinned taskbar items are stored as `.lnk` files under:
+```
+%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar
+```
+After uninstalling software, dead pins remain on the taskbar as non-functional icons. Same resolution logic as desktop shortcuts: resolve `TargetPath`, check existence, delete if missing.
+
+**Note**: After deleting taskbar `.lnk` files, the user may need to restart Explorer (`taskkill /f /im explorer.exe; start explorer.exe`) or log out/in for the taskbar to visually refresh.
+
+### 9. Invalid Start Menu Shortcuts
+After uninstalling software, dead shortcuts and empty program folders often remain in the Start Menu.
+
+Scan paths:
+- `[Environment]::GetFolderPath('StartMenu')` — current user (`%APPDATA%\Microsoft\Windows\Start Menu`)
+- `[Environment]::GetFolderPath('CommonStartMenu')` — all users (`%ProgramData%\Microsoft\Windows\Start Menu`)
+
+Scan recursively for `.lnk` files (Start Menu\Programs often has subfolders per vendor). Same `WScript.Shell` resolution logic: if `TargetPath` is missing → dead shortcut → safe to delete.
+
+Also check for **empty program folders** after shortcut removal — vendor folders (e.g., `Start Menu\Programs\SomeApp\`) that contain no remaining files should be removed to avoid clutter.
 
 ---
 

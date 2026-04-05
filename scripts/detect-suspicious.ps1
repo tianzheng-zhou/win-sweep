@@ -2,21 +2,26 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    win-sweep suspicious service detection — find leftover/unsigned services.
+    win-sweep suspicious service detection — find leftover/unsigned services and kernel drivers.
 .DESCRIPTION
-    Scans all registered services and calculates a quantified risk score based on
-    12 risk signals, identifying suspicious indicators: missing executables, no digital
-    signature, high-privilege accounts, failure auto-restart, garbled service names, etc.
+    Scans all registered services AND kernel drivers, calculating a quantified risk score
+    based on 12 risk signals. Identifies suspicious indicators: missing executables, no digital
+    signature, high-privilege accounts, failure auto-restart, garbled service names, empty
+    ImagePath, kernel driver anomalies, and suspicious file creation timestamps.
 .PARAMETER MinScore
     Minimum risk score to display (default 2, filters out low-score noise).
 .PARAMETER IncludeMicrosoft
     Whether to include services with paths in System32 signed by Microsoft (excluded by default).
+.PARAMETER IncludeDrivers
+    Whether to also scan kernel drivers via Win32_SystemDriver (enabled by default).
+    Disable with -IncludeDrivers:$false to speed up scan.
 #>
 
 [CmdletBinding()]
 param(
     [int]$MinScore = 2,
-    [switch]$IncludeMicrosoft
+    [switch]$IncludeMicrosoft,
+    [bool]$IncludeDrivers = $true
 )
 
 function Get-ExePathFromImagePath([string]$ImagePath) {
@@ -33,34 +38,58 @@ function Get-ExePathFromImagePath([string]$ImagePath) {
     return $p
 }
 
-Write-Host "Scanning all services, calculating risk scores..." -ForegroundColor Cyan
+Write-Host "Scanning all services and kernel drivers, calculating risk scores..." -ForegroundColor Cyan
+
+# Get system install date for S10 comparison
+$osInstallDate = $null
+try {
+    $osInstallDate = (Get-CimInstance Win32_OperatingSystem).InstallDate
+} catch {}
 
 $allServices = Get-CimInstance Win32_Service
+$driverCount = 0
 $results = @()
 
-foreach ($svc in $allServices) {
+# ── Helper: Score a single service/driver entry ──
+function Score-ServiceEntry {
+    param(
+        [Parameter(Mandatory)]$svc,
+        [bool]$IsDriver = $false
+    )
+
     $score = 0
     $signals = @()
 
     # ── Extract executable path ──
     $exePath = $null
     $fileExists = $false
+    $exePathExpanded = $null
     if ($svc.PathName) {
         $exePath = Get-ExePathFromImagePath $svc.PathName
-        # Expand environment variables
         $exePathExpanded = [Environment]::ExpandEnvironmentVariables($exePath)
         $fileExists = Test-Path $exePathExpanded -ErrorAction SilentlyContinue
     }
 
-    # ── S1: Executable file not found (+3) ──
-    if ($svc.PathName -and -not $fileExists) {
+    # ── S1: Executable file not found (+3) — also triggers for empty PathName ──
+    if (-not $svc.PathName -or $svc.PathName.Trim() -eq '') {
+        $score += 3; $signals += 'S1:EmptyImagePath'
+    } elseif (-not $fileExists) {
         $score += 3; $signals += 'S1:FileNotFound'
     }
 
     # ── Skip Microsoft svchost services (unless explicitly requested) ──
     if (-not $IncludeMicrosoft -and $svc.PathName -match 'windows\\system32' -and $fileExists) {
-        # Quick skip for obvious system services to reduce signature check overhead
-        if ($svc.PathName -match 'svchost\.exe') { continue }
+        if ($svc.PathName -match 'svchost\.exe') { return $null }
+    }
+
+    # ── Skip known-good Microsoft drivers ──
+    if ($IsDriver -and -not $IncludeMicrosoft -and $svc.PathName -match 'windows\\system32\\drivers' -and $fileExists) {
+        try {
+            $sig = Get-AuthenticodeSignature $exePathExpanded -ErrorAction Stop
+            if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match 'Microsoft') {
+                return $null
+            }
+        } catch {}
     }
 
     # ── S2/S3: Signature check ──
@@ -77,27 +106,27 @@ foreach ($svc in $allServices) {
             # Exclude legitimately signed Microsoft services
             if (-not $IncludeMicrosoft -and $sig.Status -eq 'Valid' -and
                 $sig.SignerCertificate.Subject -match 'Microsoft') {
-                if ($score -eq 0) { continue }
+                if ($score -eq 0) { return $null }
             }
         } catch {
             # Unable to check signature
         }
     }
 
-    # ── S4: LocalSystem (+2) ──
-    if ($svc.StartName -eq 'LocalSystem') {
+    # ── S4: LocalSystem (+2) — skip for drivers (they always run in kernel) ──
+    if (-not $IsDriver -and $svc.StartName -eq 'LocalSystem') {
         $score += 2; $signals += 'S4:LocalSystem'
     }
 
-    # ── S5: Failure auto-restart (+1) ──
-    $failRestart = $false
-    try {
-        $failOut = sc.exe qfailure $svc.Name 2>$null | Out-String
-        if ($failOut -match 'RESTART') {
-            $score += 1; $signals += 'S5:FailRestart'
-            $failRestart = $true
-        }
-    } catch {}
+    # ── S5: Failure auto-restart (+1) — not applicable to drivers ──
+    if (-not $IsDriver) {
+        try {
+            $failOut = sc.exe qfailure $svc.Name 2>$null | Out-String
+            if ($failOut -match 'RESTART') {
+                $score += 1; $signals += 'S5:FailRestart'
+            }
+        } catch {}
+    }
 
     # ── S6: Path in user-writable directory (+3) ──
     if ($exePath -and $exePath -match '(ProgramData|\\Temp\\|AppData|Downloads)') {
@@ -122,13 +151,27 @@ foreach ($svc in $allServices) {
         $score += 5; $signals += 'S9:SuspiciousArgs'
     }
 
+    # ── S10: Suspicious file creation time (+2) ──
+    if ($fileExists -and $exePathExpanded -and $osInstallDate) {
+        try {
+            $fileInfo = Get-Item $exePathExpanded -ErrorAction Stop
+            $fileAge = $fileInfo.CreationTime
+            # Flag if file was created long after OS install (>30 days) and is not recent (>90 days old)
+            $daysSinceInstall = ($fileAge - $osInstallDate).TotalDays
+            $daysSinceCreation = ((Get-Date) - $fileAge).TotalDays
+            if ($daysSinceInstall -gt 30 -and $daysSinceCreation -gt 90) {
+                $score += 2; $signals += "S10:SuspiciousAge($($fileAge.ToString('yyyy-MM-dd')))"
+            }
+        } catch {}
+    }
+
     # ── S11: No DisplayName (+2) ──
     if (-not $svc.DisplayName -or $svc.DisplayName.Trim() -eq '') {
         $score += 2; $signals += 'S11:NoDisplayName'
     }
 
     # ── S12: svchost DLL service pointing to non-existent DLL (+4) ──
-    if ($svc.PathName -match 'svchost\.exe' -and $svc.Name) {
+    if (-not $IsDriver -and $svc.PathName -match 'svchost\.exe' -and $svc.Name) {
         try {
             $dllPath = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$($svc.Name)\Parameters" -Name ServiceDll -ErrorAction Stop).ServiceDll
             $dllExpanded = [Environment]::ExpandEnvironmentVariables($dllPath)
@@ -142,11 +185,12 @@ foreach ($svc in $allServices) {
 
     # ── Filter low scores ──
     if ($score -ge $MinScore) {
-        $results += [PSCustomObject]@{
+        return [PSCustomObject]@{
             Score       = $score
             RiskLevel   = if ($score -ge 7) {'HIGH'} elseif ($score -ge 4) {'MED'} else {'LOW'}
             Name        = $svc.Name
             DisplayName = $svc.DisplayName
+            Type        = if ($IsDriver) {'Driver'} else {'Service'}
             State       = $svc.State
             StartMode   = $svc.StartMode
             Account     = $svc.StartName
@@ -154,6 +198,24 @@ foreach ($svc in $allServices) {
             ExePath     = $exePath
             FileExists  = $fileExists
         }
+    }
+    return $null
+}
+
+# ── Scan services ──
+foreach ($svc in $allServices) {
+    $r = Score-ServiceEntry -svc $svc -IsDriver $false
+    if ($r) { $results += $r }
+}
+
+# ── Scan kernel drivers ──
+if ($IncludeDrivers) {
+    Write-Host "Scanning kernel drivers..." -ForegroundColor Cyan
+    $allDrivers = Get-CimInstance Win32_SystemDriver
+    $driverCount = $allDrivers.Count
+    foreach ($drv in $allDrivers) {
+        $r = Score-ServiceEntry -svc $drv -IsDriver $true
+        if ($r) { $results += $r }
     }
 }
 
@@ -163,24 +225,25 @@ $results = $results | Sort-Object Score -Descending
 $high = ($results | Where-Object RiskLevel -eq 'HIGH').Count
 $med  = ($results | Where-Object RiskLevel -eq 'MED').Count
 $low  = ($results | Where-Object RiskLevel -eq 'LOW').Count
+$totalScanned = $allServices.Count + $driverCount
 
-Write-Host "`nScan complete: $($allServices.Count) services scanned, $($results.Count) flagged as suspicious" -ForegroundColor Cyan
+Write-Host "`nScan complete: $($allServices.Count) services + $driverCount drivers scanned, $($results.Count) flagged as suspicious" -ForegroundColor Cyan
 Write-Host "  HIGH: $high | MED: $med | LOW: $low" -ForegroundColor $(if ($high -gt 0) {'Red'} else {'Green'})
 
 if ($results.Count -gt 0) {
     Write-Host "`n=== HIGH Risk (7+) ===" -ForegroundColor Red
     $results | Where-Object RiskLevel -eq 'HIGH' |
-        Select-Object Score, Name, DisplayName, Account, Signals, ExePath, FileExists |
+        Select-Object Score, Type, Name, DisplayName, Account, Signals, ExePath, FileExists |
         Format-Table -AutoSize -Wrap
 
     Write-Host "=== MED Risk (4-6) ===" -ForegroundColor Yellow
     $results | Where-Object RiskLevel -eq 'MED' |
-        Select-Object Score, Name, DisplayName, Account, Signals, ExePath |
+        Select-Object Score, Type, Name, DisplayName, Account, Signals, ExePath |
         Format-Table -AutoSize -Wrap
 
     Write-Host "=== LOW Risk (2-3) ===" -ForegroundColor DarkYellow
     $results | Where-Object RiskLevel -eq 'LOW' |
-        Select-Object Score, Name, DisplayName, Signals |
+        Select-Object Score, Type, Name, DisplayName, Signals |
         Format-Table -AutoSize -Wrap
 } else {
     Write-Host "`nNo suspicious services found." -ForegroundColor Green

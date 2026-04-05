@@ -5,6 +5,7 @@
 .DESCRIPTION
     Moves selected Run entries to the RunDisabled key for safe disabling.
     Supports restoring individual startup items. HKCU entries do not require admin privileges.
+    Covers: Run, RunOnce, WOW6432Node Run, and Startup folder items.
 .PARAMETER Action
     Operation mode: List (list items), Disable (disable items), Restore (restore items).
 .PARAMETER Names
@@ -24,19 +25,46 @@ param(
     [string]$Scope = 'HKCU'
 )
 
-$runPath     = "${Scope}:\Software\Microsoft\Windows\CurrentVersion\Run"
+# ── Admin check for HKLM scope ──
+if ($Scope -eq 'HKLM') {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+    if (-not $isAdmin) {
+        Write-Error "HKLM scope requires Administrator privileges. Restart as admin or use -Scope HKCU."
+        exit 1
+    }
+}
+
+$runPath      = "${Scope}:\Software\Microsoft\Windows\CurrentVersion\Run"
 $disabledPath = "${Scope}:\Software\Microsoft\Windows\CurrentVersion\RunDisabled"
+$runOncePath  = "${Scope}:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
+$wow64RunPath = if ($Scope -eq 'HKLM') { 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run' } else { $null }
+
+# Startup folder paths
+$startupFolder = if ($Scope -eq 'HKCU') {
+    [Environment]::GetFolderPath('Startup')
+} else {
+    [Environment]::GetFolderPath('CommonStartup')
+}
 
 # Exclude default registry properties
 $excludeProps = '^PS(Path|ParentPath|ChildName|Provider|Drive)$'
 
 function Get-RunEntries([string]$RegPath) {
-    if (-not (Test-Path $RegPath)) { return @() }
+    if (-not $RegPath -or -not (Test-Path $RegPath)) { return @() }
     $props = Get-ItemProperty $RegPath -ErrorAction SilentlyContinue
     if (-not $props) { return @() }
     $props.PSObject.Properties |
         Where-Object { $_.Name -notmatch $excludeProps } |
         ForEach-Object { [PSCustomObject]@{ Name = $_.Name; Command = $_.Value } }
+}
+
+function Get-StartupFolderEntries([string]$FolderPath) {
+    if (-not $FolderPath -or -not (Test-Path $FolderPath)) { return @() }
+    Get-ChildItem $FolderPath -Filter '*.lnk' -ErrorAction SilentlyContinue | ForEach-Object {
+        [PSCustomObject]@{ Name = $_.BaseName; Command = $_.FullName }
+    }
 }
 
 switch ($Action) {
@@ -53,6 +81,35 @@ switch ($Action) {
         $disabled = Get-RunEntries $disabledPath
         if ($disabled.Count -gt 0) {
             $disabled | Format-Table -AutoSize -Wrap
+        } else {
+            Write-Host "  (empty)" -ForegroundColor DarkGray
+        }
+
+        # RunOnce entries
+        Write-Host "`n$Scope\RunOnce:" -ForegroundColor Cyan
+        $runOnce = Get-RunEntries $runOncePath
+        if ($runOnce.Count -gt 0) {
+            $runOnce | Format-Table -AutoSize -Wrap
+        } else {
+            Write-Host "  (empty)" -ForegroundColor DarkGray
+        }
+
+        # WOW6432Node (HKLM only)
+        if ($wow64RunPath) {
+            Write-Host "`nHKLM\WOW6432Node\Run (32-bit startup items):" -ForegroundColor Cyan
+            $wow64 = Get-RunEntries $wow64RunPath
+            if ($wow64.Count -gt 0) {
+                $wow64 | Format-Table -AutoSize -Wrap
+            } else {
+                Write-Host "  (empty)" -ForegroundColor DarkGray
+            }
+        }
+
+        # Startup folder
+        Write-Host "`nStartup Folder ($Scope): $startupFolder" -ForegroundColor Cyan
+        $folderItems = Get-StartupFolderEntries $startupFolder
+        if ($folderItems.Count -gt 0) {
+            $folderItems | Format-Table -AutoSize -Wrap
         } else {
             Write-Host "  (empty)" -ForegroundColor DarkGray
         }

@@ -25,6 +25,9 @@ A skill for diagnosing and cleaning up Windows system bloat: redundant services,
 Run the diagnostic script to assess system state. Diagnostic operations are read-only and never modify the system.
 
 1. [System Overview](./scripts/diagnose.ps1) — Disk usage, installed software, startup items, services, scheduled tasks, memory usage ranking
+   - **Quick mode** (default): Skips slow C:\ directory size scan; suitable for a fast first-pass assessment
+   - **Deep mode** (`-Section Deep`): Full recursive directory scan for disk space analysis
+   - **JSON output** (`-Output Json`): Structured output for programmatic consumption by downstream scripts
 2. Review output and identify optimization targets
 
 ### Phase 2: Optimization (Dangerous — Confirmation Required)
@@ -33,12 +36,19 @@ Execute targeted fixes based on diagnostic results. **All modification operation
 
 1. [Service Optimization](./scripts/optimize-services.ps1) — Batch-modify service startup modes (Auto → Manual/Disabled)
 2. [Startup Management](./scripts/manage-startups.ps1) — Disable startup items with backup to `RunDisabled` registry key
+   - Covers: `HKCU\..\Run`, `HKLM\..\Run`, `WOW6432Node\Run`, `RunOnce`, and Startup folder `.lnk` files
+   - Automatically checks admin privileges when HKLM scope is requested
 3. [Scheduled Task Cleanup](./scripts/clean-tasks.ps1) — Disable unnecessary scheduled tasks
-4. [Suspicious Service Detection](./scripts/detect-suspicious.ps1) — Find leftover/unsigned/suspicious services
+   - **DeleteOrphaned** action (`-Action DeleteOrphaned`): Finds and removes tasks belonging to already-uninstalled software; exports task XML to backup before deletion
+4. [Suspicious Service Detection](./scripts/detect-suspicious.ps1) — Find leftover/unsigned/suspicious services **and kernel drivers**
+   - Scans both `Win32_Service` and `Win32_SystemDriver` (controlled by `-IncludeDrivers` flag, on by default)
+   - Detects services with empty `PathName` (S1:EmptyImagePath) and suspicious file creation timestamps (S10)
 5. **Software Removal** (three-step workflow — see details below):
    - a. [List & Recommend](./scripts/uninstall-software.ps1) (`-Action List`) — Generate a "recommended uninstall list" from diagnostic results
    - b. **User manually uninstalls** via Settings > Apps or Control Panel — **the AI cannot reliably uninstall software from the terminal** (see "Terminal Uninstall Limitations" below)
-   - c. [Leftover Cleanup](./scripts/uninstall-software.ps1) (`-Action Cleanup`) — After user confirms manual uninstall is done, scan 6 areas for residuals and clean them up
+   - c. [Leftover Cleanup](./scripts/uninstall-software.ps1) (`-Action Cleanup`) — After user confirms manual uninstall is done, scan 9 areas for residuals and clean them up (services, kernel drivers, scheduled tasks, startup items including WOW6432Node/RunOnce, directories, AppData, temp files, **desktop shortcuts**, **taskbar pins**, and **Start Menu shortcuts**)
+   - d. [Cleanup Plan](./scripts/uninstall-software.ps1) (`-Action CleanupPlan`) — Same scan as Cleanup, but outputs a structured JSON plan to stdout for review or programmatic use
+   - e. [Cleanup Execute](./scripts/uninstall-software.ps1) (`-Action CleanupExecute -Plan '<json>'`) — Takes a JSON plan (from CleanupPlan), executes each item with: registry/task XML backup before deletion, `PendingFileRenameOperations` for locked files/directories (scheduled for removal on next reboot), per-item `[OK]/[FAIL]/[LOCKED]/[PENDING]` status reporting
 
 #### Terminal Uninstall Limitations
 
@@ -69,9 +79,17 @@ AI: I've identified these programs for removal:
       • Right-click the tray icon and exit the program first
       • If the uninstaller is blocked, reboot into Safe Mode
 
+    💡 Tip: If an uninstall GUI window pops up during the process,
+    just follow its prompts and click "Uninstall" / "确认卸载".
+    Some uninstallers may also try to persuade you to keep the
+    software — ignore those and proceed with removal.
+
     After you've finished uninstalling, tell me and I'll:
       • Scan for leftover services, scheduled tasks, startup items,
         directories, registry entries, and temp files
+      • Clean up invalid shortcuts on your Desktop
+      • Remove dead pinned items from the Taskbar
+      • Remove dead Start Menu entries and empty program folders
       • Clean them up with your confirmation
 ```
 
@@ -88,6 +106,8 @@ AI: I've identified these programs for removal:
 ### Phase 3: Verification (Safe — No Confirmation Needed)
 
 1. [Verification Script](./scripts/verify.ps1) — Confirm that changes have taken effect correctly
+   - **Absence checks** (`-CheckAbsent '<json>'`): Verify that removed services, tasks, registry keys, or file paths are truly gone (detects `DELETE_PENDING` state for services)
+   - **Reboot state** (`-CheckPendingReboot`): Check `PendingFileRenameOperations` for files scheduled for reboot-deletion, service `DeleteFlag` state, and Windows Update reboot-required flag
 2. After reboot, re-run diagnostics to compare before/after
 
 ---
@@ -222,5 +242,5 @@ Load on demand — read the relevant document only when encountering a specific 
 - [Service Optimization Rules](./references/service-rules.md) — Decision framework: whether any service can be safely modified + universal pattern matching
 - [Telemetry Identification & Removal](./references/telemetry.md) — Identification framework for telemetry components (keyword patterns + behavioral traits) + known vendor cases + three-layer disable templates
 - [Suspicious Service Checklist](./references/suspicious-checklist.md) — Quantified risk scoring system (12 signals) + investigation workflow + decision matrix + false positive exclusion
-- [PowerShell & sc.exe Gotchas](./references/sc-gotchas.md) — Common AI-generated PowerShell errors (`&&`, comparison operators, array unwrapping, etc.) + sc.exe-specific pitfalls + self-check list
-- [Software Uninstall Guide](./references/uninstall-guide.md) — Decision framework for software removal + removal strategies (winget/MSI/native) + 6-area leftover cleanup checklist + bloatware patterns + edge cases (kernel drivers, UWP, anti-uninstall software)
+- [PowerShell & sc.exe Gotchas](./references/sc-gotchas.md) — Common AI-generated PowerShell errors (`&&`, comparison operators, array unwrapping, multi-line terminal paste issues, etc.) + sc.exe-specific pitfalls + self-check list
+- [Software Uninstall Guide](./references/uninstall-guide.md) — Decision framework for software removal + removal strategies (winget/MSI/native) + 9-area leftover cleanup checklist + bloatware patterns + edge cases (kernel drivers, UWP, anti-uninstall software)

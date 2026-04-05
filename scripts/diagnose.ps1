@@ -5,6 +5,19 @@
 .DESCRIPTION
     Collects disk usage, installed software, startup items, services,
     scheduled tasks, and memory usage rankings, outputting a structured report.
+
+    Two preset modes:
+    - Quick (default): System overview, disk capacity, startups, non-svchost services,
+      non-Microsoft tasks, memory top. Skips slow directory scanning.
+    - Deep: Everything in Quick + C: top-level directory sizes (recursive scan).
+      Use when investigating disk space issues specifically.
+
+    Individual sections can still be selected with -Section.
+.PARAMETER Section
+    Default 'Quick'. Use 'Deep' to include directory size scan, 'All' for everything,
+    or pick individual sections.
+.PARAMETER Output
+    Output format: 'Text' (default, human-readable) or 'Json' (structured, for AI parsing).
 .NOTES
     Full results require an elevated (Administrator) PowerShell session.
     Without admin privileges, some information will be skipped (service details, etc.).
@@ -12,8 +25,11 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('All','System','Disk','Software','Startups','Services','Tasks','Memory')]
-    [string[]]$Section = 'All'
+    [ValidateSet('Quick','Deep','All','System','Disk','DiskDeep','Software','Startups','Services','Tasks','Memory')]
+    [string[]]$Section = 'Quick',
+
+    [ValidateSet('Text','Json')]
+    [string]$Output = 'Text'
 )
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -49,10 +65,18 @@ function Write-Section([string]$Title) {
     Write-Host "$('=' * 60)" -ForegroundColor Cyan
 }
 
-$runAll = $Section -contains 'All'
+# Resolve Quick/Deep/All into individual sections
+$runAll    = $Section -contains 'All' -or $Section -contains 'Deep'
+$runQuick  = $Section -contains 'Quick'
+$runDeep   = $Section -contains 'Deep' -or $Section -contains 'All'
+
+# Quick = System + Disk(summary) + Software + Startups + Services + Tasks + Memory
+# Deep  = Quick + DiskDeep (directory size scan)
+
+$jsonResult = @{}  # Collect structured data when Output=Json
 
 # ── System Info ──
-if ($runAll -or $Section -contains 'System') {
+if ($runAll -or $runQuick -or $Section -contains 'System') {
     Write-Section 'System Info'
     $os = Get-CimInstance Win32_OperatingSystem
     $cs = Get-CimInstance Win32_ComputerSystem
@@ -67,36 +91,54 @@ if ($runAll -or $Section -contains 'System') {
         FreeMemoryGB  = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
         AdminSession  = $isAdmin
     } | Format-List
+
+    if ($Output -eq 'Json') {
+        $jsonResult['System'] = [PSCustomObject]@{
+            ComputerName = $cs.Name; OS = $os.Caption; Build = $os.BuildNumber
+            InstallDate = $os.InstallDate; LastBoot = $os.LastBootUpTime
+            TotalMemoryGB = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+            FreeMemoryGB = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+            AdminSession = $isAdmin
+        }
+    }
 }
 
 # ── Disk Usage ──
-if ($runAll -or $Section -contains 'Disk') {
+if ($runAll -or $runQuick -or $Section -contains 'Disk' -or $Section -contains 'DiskDeep') {
     Write-Section 'Disk Usage'
-    Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
+    $diskInfo = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
         Select-Object DeviceID,
             @{N='SizeGB';    E={[math]::Round($_.Size / 1GB, 1)}},
             @{N='FreeGB';    E={[math]::Round($_.FreeSpace / 1GB, 1)}},
             @{N='UsedGB';    E={[math]::Round(($_.Size - $_.FreeSpace) / 1GB, 1)}},
-            @{N='UsedPct';   E={[math]::Round(($_.Size - $_.FreeSpace) / $_.Size * 100, 1)}} |
-        Format-Table -AutoSize
+            @{N='UsedPct';   E={[math]::Round(($_.Size - $_.FreeSpace) / $_.Size * 100, 1)}}
 
-    # C: drive top-level directory sizes (top 15)
-    Write-Host "`nC:\ Top-Level Directory Sizes (Top 15):" -ForegroundColor Yellow
-    Get-ChildItem C:\ -Directory -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            $size = (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
-                     Measure-Object -Property Length -Sum).Sum
-            [PSCustomObject]@{
-                Directory = $_.Name
-                SizeGB    = [math]::Round($size / 1GB, 2)
-            }
-        } |
-        Sort-Object SizeGB -Descending | Select-Object -First 15 |
-        Format-Table -AutoSize
+    if ($Output -eq 'Json') { $jsonResult['Disk'] = $diskInfo }
+    else { $diskInfo | Format-Table -AutoSize }
+
+    # C: drive top-level directory sizes — Deep/DiskDeep/All only (slow operation)
+    if ($runDeep -or $Section -contains 'DiskDeep') {
+        Write-Host "`nC:\ Top-Level Directory Sizes (Top 15) — this may take a moment..." -ForegroundColor Yellow
+        $dirSizes = Get-ChildItem C:\ -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $size = (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                         Measure-Object -Property Length -Sum).Sum
+                [PSCustomObject]@{
+                    Directory = $_.Name
+                    SizeGB    = [math]::Round($size / 1GB, 2)
+                }
+            } |
+            Sort-Object SizeGB -Descending | Select-Object -First 15
+
+        if ($Output -eq 'Json') { $jsonResult['DiskDirectories'] = $dirSizes }
+        else { $dirSizes | Format-Table -AutoSize }
+    } elseif ($runQuick) {
+        Write-Host "`n  (Directory size scan skipped in Quick mode. Use -Section Deep for full scan.)" -ForegroundColor DarkGray
+    }
 }
 
 # ── Installed Software ──
-if ($runAll -or $Section -contains 'Software') {
+if ($runAll -or $runQuick -or $Section -contains 'Software') {
     Write-Section 'Installed Software (Top 30 by size)'
     $regPaths = @(
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
@@ -112,7 +154,7 @@ if ($runAll -or $Section -contains 'Software') {
 }
 
 # ── Startup Items ──
-if ($runAll -or $Section -contains 'Startups') {
+if ($runAll -or $runQuick -or $Section -contains 'Startups') {
     Write-Section 'Startup Items'
 
     $runKeys = @(
@@ -144,7 +186,7 @@ if ($runAll -or $Section -contains 'Startups') {
 }
 
 # ── Services ──
-if ($runAll -or $Section -contains 'Services') {
+if ($runAll -or $runQuick -or $Section -contains 'Services') {
     Write-Section 'Auto-Start Services (non-svchost first)'
     $services = Get-CimInstance Win32_Service -Filter "StartMode='Auto'" |
         Select-Object Name, DisplayName, State, StartName,
@@ -169,7 +211,7 @@ if ($runAll -or $Section -contains 'Services') {
 }
 
 # ── Scheduled Tasks ──
-if ($runAll -or $Section -contains 'Tasks') {
+if ($runAll -or $runQuick -or $Section -contains 'Tasks') {
     Write-Section 'Enabled Non-Microsoft Scheduled Tasks'
     Get-ScheduledTask -ErrorAction SilentlyContinue |
         Where-Object { $_.State -ne 'Disabled' -and $_.TaskPath -notmatch '^\\Microsoft\\' } |
@@ -184,7 +226,7 @@ if ($runAll -or $Section -contains 'Tasks') {
 }
 
 # ── Memory Usage ──
-if ($runAll -or $Section -contains 'Memory') {
+if ($runAll -or $runQuick -or $Section -contains 'Memory') {
     Write-Section 'Memory Usage Top 30 (non-system processes)'
     Get-Process -ErrorAction SilentlyContinue |
         Where-Object { $_.ProcessName -notmatch '^(Idle|System|Registry|Memory Compression|smss|csrss|wininit|winlogon|services|lsass|svchost)$' } |
@@ -200,3 +242,9 @@ if ($runAll -or $Section -contains 'Memory') {
 }
 
 Write-Host "`nDiagnostics complete." -ForegroundColor Green
+
+# ── Json output ──
+if ($Output -eq 'Json' -and $jsonResult.Count -gt 0) {
+    Write-Host "`n─── JSON OUTPUT ───" -ForegroundColor Cyan
+    $jsonResult | ConvertTo-Json -Depth 5
+}

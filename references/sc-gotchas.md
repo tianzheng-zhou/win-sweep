@@ -293,6 +293,37 @@ sc.exe delete "ServiceName"
 Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\ServiceName"
 ```
 
+### 14. Multi-Line `if/else` Blocks Break When Pasted into Terminal
+
+When AI generates multi-line `if/else` code and the user pastes it into an interactive PowerShell terminal (including VS Code integrated terminal), each line is executed independently. The `else` block becomes a standalone statement and errors out.
+
+```powershell
+# This works in a .ps1 script, but BREAKS when pasted into terminal:
+if (Test-Path $path) {
+    Remove-Item $path
+}
+else {
+    Write-Host "Not found"
+}
+# Terminal error: "else" is not recognized — because "}" on the previous line
+# already closed the statement.
+
+# Safe for terminal paste — keep else on the same line as closing brace:
+if (Test-Path $path) {
+    Remove-Item $path
+} else {
+    Write-Host "Not found"
+}
+
+# Even safer — single line or pre-compute:
+$exists = Test-Path $path
+if ($exists) { Remove-Item $path } else { Write-Host "Not found" }
+```
+
+**Rule: When generating code that may be pasted interactively, always put `} else {`, `} elseif {`, `} catch {`, `} finally {` on the same line as the closing brace `}`.**
+
+This also affects `try/catch/finally`, `do/while`, and `switch` blocks. The underlying issue is that PowerShell's interactive parser treats a line ending with `}` as a complete statement.
+
 ---
 
 ## AI Self-Check Checklist
@@ -310,3 +341,4 @@ After generating PowerShell code, verify against this checklist:
 - [ ] Registry paths: PowerShell uses `HKLM:\`, reg.exe uses `HKLM\`?
 - [ ] Is `Format-Table` / `Format-List` at the end of the pipeline?
 - [ ] Are property accesses inside double-quoted strings wrapped in `$()` sub-expressions?
+- [ ] Are `} else {`, `} catch {`, `} finally {` on the same line as `}`? (Terminal paste safety)
