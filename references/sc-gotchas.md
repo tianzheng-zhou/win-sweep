@@ -324,6 +324,43 @@ if ($exists) { Remove-Item $path } else { Write-Host "Not found" }
 
 This also affects `try/catch/finally`, `do/while`, and `switch` blocks. The underlying issue is that PowerShell's interactive parser treats a line ending with `}` as a complete statement.
 
+### 15. PowerShell 5.1 File Encoding: Must Use UTF-8 with BOM
+
+PowerShell 5.1 on non-English Windows defaults to the system locale encoding (e.g., GBK on Chinese Windows, Shift_JIS on Japanese Windows) when reading script files. If a `.ps1` file contains non-ASCII characters (Chinese text, box-drawing characters `─`, emoji, etc.) and is saved **without** BOM, PowerShell will misinterpret the bytes, causing:
+- Parse errors on lines with multi-byte characters
+- String comparisons silently failing (garbled characters never match)
+- `Write-Host` outputting mojibake
+
+```powershell
+# Check if a file has BOM
+$bytes = [System.IO.File]::ReadAllBytes("script.ps1")
+$hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+
+# Add BOM to a file that's missing it
+$content = [System.IO.File]::ReadAllText("script.ps1", [System.Text.Encoding]::UTF8)
+$utf8Bom = New-Object System.Text.UTF8Encoding $true
+[System.IO.File]::WriteAllText("script.ps1", $content, $utf8Bom)
+```
+
+**All `.ps1` files must be saved as UTF-8 with BOM (first 3 bytes: `EF BB BF`).** This is the only encoding that works reliably across all PowerShell versions on all Windows locales.
+
+### 16. sc.exe Access Denied (Exit Code 5) on Protected Services
+
+Some Windows services are protected by PPL (Protected Process Light) or SDDL restrictions, making them immune to modification even from an elevated Administrator session. `sc.exe config` returns exit code 5 (Access Denied).
+
+```powershell
+# This fails even with admin:
+sc.exe config "SgrmBroker" start= disabled
+# [SC] OpenService FAILED 5: Access is denied.
+
+# Known protected services:
+# - SgrmBroker (System Guard Runtime Monitor Broker)
+# - TrustedInstaller (Windows Modules Installer)
+# - Services protected by Early Launch AM drivers
+```
+
+**When scripting, always check for exit code 5 specifically and report it as `[PROTECTED]` rather than a generic failure, so the human operator understands the limitation.**
+
 ---
 
 ## AI Self-Check Checklist
@@ -342,3 +379,5 @@ After generating PowerShell code, verify against this checklist:
 - [ ] Is `Format-Table` / `Format-List` at the end of the pipeline?
 - [ ] Are property accesses inside double-quoted strings wrapped in `$()` sub-expressions?
 - [ ] Are `} else {`, `} catch {`, `} finally {` on the same line as `}`? (Terminal paste safety)
+- [ ] Are all `.ps1` files saved as UTF-8 with BOM? (Critical for non-English Windows)
+- [ ] When `sc.exe` returns exit code 5, is it reported as `[PROTECTED]` not just `[FAIL]`?

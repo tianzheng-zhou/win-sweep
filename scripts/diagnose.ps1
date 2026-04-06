@@ -25,7 +25,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('Quick','Deep','All','System','Disk','DiskDeep','Software','Startups','Services','Tasks','Memory')]
+    [ValidateSet('Quick','Deep','All','System','Disk','DiskDeep','Software','Startups','Services','Tasks','Memory','Telemetry')]
     [string[]]$Section = 'Quick',
 
     [ValidateSet('Text','Json')]
@@ -80,10 +80,21 @@ if ($runAll -or $runQuick -or $Section -contains 'System') {
     Write-Section 'System Info'
     $os = Get-CimInstance Win32_OperatingSystem
     $cs = Get-CimInstance Win32_ComputerSystem
+
+    # Detect Windows edition type
+    $editionType = 'Unknown'
+    $caption = $os.Caption
+    if ($caption -match 'LTSC|LTSB') { $editionType = 'LTSC' }
+    elseif ($caption -match 'Enterprise') { $editionType = 'Enterprise' }
+    elseif ($caption -match 'Education') { $editionType = 'Education' }
+    elseif ($caption -match 'Pro') { $editionType = 'Pro' }
+    elseif ($caption -match 'Home') { $editionType = 'Home' }
+
     [PSCustomObject]@{
         ComputerName  = $cs.Name
         OS            = $os.Caption
         Build         = $os.BuildNumber
+        EditionType   = $editionType
         InstallDate   = $os.InstallDate
         LastBoot      = $os.LastBootUpTime
         Uptime        = ((Get-Date) - $os.LastBootUpTime).ToString('d\.hh\:mm\:ss')
@@ -92,9 +103,17 @@ if ($runAll -or $runQuick -or $Section -contains 'System') {
         AdminSession  = $isAdmin
     } | Format-List
 
+    # Edition-specific warnings
+    if ($editionType -eq 'LTSC') {
+        Write-Host "  [NOTE] LTSC edition detected — no Microsoft Store, no Cortana, System Restore may be disabled by default." -ForegroundColor DarkYellow
+    } elseif ($editionType -eq 'Home') {
+        Write-Host "  [NOTE] Home edition detected — no Group Policy Editor (gpedit.msc)." -ForegroundColor DarkYellow
+    }
+
     if ($Output -eq 'Json') {
         $jsonResult['System'] = [PSCustomObject]@{
             ComputerName = $cs.Name; OS = $os.Caption; Build = $os.BuildNumber
+            EditionType = $editionType
             InstallDate = $os.InstallDate; LastBoot = $os.LastBootUpTime
             TotalMemoryGB = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
             FreeMemoryGB = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
@@ -119,12 +138,26 @@ if ($runAll -or $runQuick -or $Section -contains 'Disk' -or $Section -contains '
     # C: drive top-level directory sizes — Deep/DiskDeep/All only (slow operation)
     if ($runDeep -or $Section -contains 'DiskDeep') {
         Write-Host "`nC:\ Top-Level Directory Sizes (Top 15) — this may take a moment..." -ForegroundColor Yellow
+        $knownRootDirs = @(
+            'Windows', 'Program Files', 'Program Files (x86)', 'Users', 'PerfLogs',
+            'Recovery', '$Recycle.Bin', 'System Volume Information', 'Documents and Settings',
+            'ProgramData', 'Intel', 'AMD', 'NVIDIA', 'MSOCache', 'inetpub', 'Boot',
+            'EFI', 'OneDriveTemp', 'Drivers'
+        )
         $dirSizes = Get-ChildItem C:\ -Directory -ErrorAction SilentlyContinue |
             ForEach-Object {
                 $size = (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
                          Measure-Object -Property Length -Sum).Sum
+                $isSuspect = -not ($knownRootDirs | Where-Object { $_ -eq $_.Name }) -and
+                             -not $_.Name.StartsWith('$')
+                # More accurate check: compare against whitelist
+                $isKnown = $false
+                foreach ($kd in $knownRootDirs) {
+                    if ($_.Name -eq $kd) { $isKnown = $true; break }
+                }
+                $flag = if (-not $isKnown -and -not $_.Name.StartsWith('$')) { '[SUSPECT] ' } else { '' }
                 [PSCustomObject]@{
-                    Directory = $_.Name
+                    Directory = "$flag$($_.Name)"
                     SizeGB    = [math]::Round($size / 1GB, 2)
                 }
             } |
@@ -203,10 +236,11 @@ if ($runAll -or $runQuick -or $Section -contains 'Services') {
         Select-Object Name, DisplayName, State, StartName, BinaryPath |
         Format-Table -AutoSize -Wrap
 
-    Write-Host "`nsvchost-hosted auto-start services ($($services | Where-Object {$_.IsSvchost} | Measure-Object | Select-Object -ExpandProperty Count)):" -ForegroundColor Yellow
+    $svchostCount = ($services | Where-Object {$_.IsSvchost} | Measure-Object).Count
+    Write-Host "`nsvchost-hosted auto-start services: $svchostCount (names only — expand with -Section Services if needed)" -ForegroundColor DarkGray
     $services | Where-Object { $_.IsSvchost } |
         Sort-Object Name |
-        Select-Object Name, DisplayName, State, StartName |
+        Select-Object Name, DisplayName |
         Format-Table -AutoSize
 }
 
@@ -242,6 +276,118 @@ if ($runAll -or $runQuick -or $Section -contains 'Memory') {
 }
 
 Write-Host "`nDiagnostics complete." -ForegroundColor Green
+
+# ── Telemetry Quick Scan ──
+if ($runAll -or $runQuick -or $Section -contains 'Telemetry') {
+    Write-Section 'Telemetry Components (Quick Scan)'
+    $telemetryPattern = 'telemetry|CEIP|SQM|DiagTrack|esrv|QUEENCREEK|UsageReport|NvTelemetry|dmwappushservice'
+    $issueCount = 0
+
+    $telemetrySvc = @(Get-CimInstance Win32_Service |
+        Where-Object { $_.Name -match $telemetryPattern -or $_.DisplayName -match $telemetryPattern } |
+        Select-Object Name, DisplayName, StartMode, State)
+    if ($telemetrySvc.Count -gt 0) {
+        Write-Host "`n  Telemetry Services ($($telemetrySvc.Count)):" -ForegroundColor Yellow
+        $telemetrySvc | Format-Table -AutoSize
+        $issueCount += $telemetrySvc.Count
+    }
+
+    $telemetryTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+        Where-Object { $_.State -ne 'Disabled' -and ($_.TaskName -match $telemetryPattern -or $_.TaskPath -match $telemetryPattern) } |
+        Select-Object TaskName, TaskPath, State)
+    if ($telemetryTasks.Count -gt 0) {
+        Write-Host "  Telemetry Scheduled Tasks ($($telemetryTasks.Count)):" -ForegroundColor Yellow
+        $telemetryTasks | Format-Table -AutoSize
+        $issueCount += $telemetryTasks.Count
+    }
+
+    if ($issueCount -eq 0) {
+        Write-Host "  No active telemetry components found." -ForegroundColor Green
+    } else {
+        Write-Host "  Total: $issueCount telemetry component(s) detected. See references/telemetry.md for three-layer sweep." -ForegroundColor Yellow
+    }
+
+    if ($Output -eq 'Json') {
+        $jsonResult['Telemetry'] = @{ Services = $telemetrySvc; Tasks = $telemetryTasks; Count = $issueCount }
+    }
+}
+
+# ── Multi-layer Association (Edge example: service + tasks for same product) ──
+if ($runAll -or $runQuick) {
+    Write-Section 'Multi-Layer Associations'
+    # Detect products with presence across services + tasks + startups
+    $edgeSvc = @(Get-CimInstance Win32_Service | Where-Object { $_.Name -match 'edgeupdate' } | Select-Object Name, StartMode, State)
+    $edgeTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -match 'MicrosoftEdgeUpdate' -and $_.State -ne 'Disabled' } | Select-Object TaskName, State)
+    if ($edgeSvc.Count -gt 0 -or $edgeTasks.Count -gt 0) {
+        Write-Host "`n  Microsoft Edge Update:" -ForegroundColor Yellow
+        if ($edgeSvc.Count -gt 0) {
+            Write-Host "    Services:" -ForegroundColor DarkGray
+            $edgeSvc | ForEach-Object { Write-Host "      - $($_.Name) ($($_.StartMode)/$($_.State))" }
+        }
+        if ($edgeTasks.Count -gt 0) {
+            Write-Host "    Scheduled Tasks:" -ForegroundColor DarkGray
+            $edgeTasks | ForEach-Object { Write-Host "      - $($_.TaskName) ($($_.State))" }
+        }
+        Write-Host "    [TIP] Optimizing Edge services without disabling tasks leaves update alive via task trigger." -ForegroundColor Cyan
+    }
+
+    # Generic: check for update-related tasks whose corresponding services exist
+    $updateSvcNames = @(Get-CimInstance Win32_Service | Where-Object { $_.Name -match 'update' -and $_.Name -notmatch '^(wuauserv|UsoSvc)$' } | Select-Object -ExpandProperty Name)
+    $updateTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+        $_.State -ne 'Disabled' -and $_.TaskPath -notmatch '^\\Microsoft\\' -and $_.TaskName -match 'update'
+    })
+    if ($updateSvcNames.Count -gt 0 -and $updateTasks.Count -gt 0) {
+        Write-Host "`n  Other Update Service+Task pairs:" -ForegroundColor Yellow
+        foreach ($sn in $updateSvcNames) {
+            $related = $updateTasks | Where-Object { $_.TaskName -match ($sn -replace 'update', '') -or $_.TaskName -match $sn }
+            if ($related) {
+                Write-Host "    Service '$sn' has related tasks:" -ForegroundColor DarkGray
+                $related | ForEach-Object { Write-Host "      - $($_.TaskName)" }
+            }
+        }
+    }
+}
+
+# ── Summary ──
+if ($runAll -or $runQuick) {
+    Write-Section 'Summary'
+    $summaryIssues = @()
+
+    # Count non-svchost auto services
+    $nonSvchostAuto = @(Get-CimInstance Win32_Service -Filter "StartMode='Auto'" | Where-Object { $_.PathName -notmatch 'svchost\.exe' })
+    if ($nonSvchostAuto.Count -gt 15) {
+        $summaryIssues += "[WARN] $($nonSvchostAuto.Count) non-svchost auto-start services (many may be unnecessary)"
+    }
+
+    # Count non-MS active tasks
+    $nmTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.State -ne 'Disabled' -and $_.TaskPath -notmatch '^\\Microsoft\\' })
+    if ($nmTasks.Count -gt 5) {
+        $summaryIssues += "[INFO] $($nmTasks.Count) active non-Microsoft scheduled tasks"
+    }
+
+    # Disk space
+    $cDrive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+    if ($cDrive) {
+        $freeGB = [math]::Round($cDrive.FreeSpace / 1GB, 1)
+        $usedPct = [math]::Round(($cDrive.Size - $cDrive.FreeSpace) / $cDrive.Size * 100, 1)
+        if ($freeGB -lt 20) {
+            $summaryIssues += "[WARN] C: drive only $freeGB GB free ($usedPct% used)"
+        }
+    }
+
+    if ($summaryIssues.Count -eq 0) {
+        Write-Host "  No major issues detected." -ForegroundColor Green
+    } else {
+        foreach ($issue in $summaryIssues) {
+            $color = if ($issue.StartsWith('[WARN]')) { 'Yellow' } else { 'Cyan' }
+            Write-Host "  $issue" -ForegroundColor $color
+        }
+    }
+
+    if ($Output -eq 'Json') {
+        $jsonResult['Summary'] = $summaryIssues
+    }
+}
 
 # ── Json output ──
 if ($Output -eq 'Json' -and $jsonResult.Count -gt 0) {

@@ -162,6 +162,13 @@ These are **universal patterns** applicable to any system. The AI should match d
 
 ## Edge Cases and Notes
 
+- **System-Protected Services**: Some services cannot be modified even with Administrator privileges — `sc.exe config` returns Access Denied (exit code 5). Known protected services include:
+  - `SgrmBroker` (System Guard Runtime Monitor Broker) — protected by PPL (Protected Process Light)
+  - `TrustedInstaller` — the Windows Modules Installer runs under its own protected account
+  - Any service protected by Early Launch AM (antimalware) drivers
+
+  When encountering these, the AI should report them as `[PROTECTED]` rather than `[FAIL]` and explain that modification requires advanced techniques (e.g., editing the registry offline in recovery mode) which are not recommended.
+
 - **SysMain (Superfetch)**: Minimal benefit on SSD systems — can change to Manual; keep Auto on HDD systems
 - **WSearch**: Same logic — depends on storage media and usage habits
 - **TabletInputService**: Can change to Manual if touchscreen/stylus not used, but some touchpad gestures depend on it

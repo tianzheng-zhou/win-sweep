@@ -111,9 +111,16 @@ foreach ($item in $serviceList) {
             Command="sc.exe config `"$svcName`" start= $scTarget"
         }
     } else {
-        Write-Host " ✗" -ForegroundColor Red
-        Write-Host "    $($output.Trim())" -ForegroundColor Red
-        $failed += [PSCustomObject]@{ Name=$svcName; From=$currentMode; To=$target; Error=$output.Trim() }
+        $statusLabel = '[FAIL]'
+        $errorDetail = $output.Trim()
+        # Distinguish Access Denied (protected services like SgrmBroker, TrustedInstaller)
+        if ($LASTEXITCODE -eq 5 -or $output -match 'Access is denied') {
+            $statusLabel = '[PROTECTED]'
+            $errorDetail = "Access Denied — this service is system-protected and cannot be modified even with admin privileges"
+        }
+        Write-Host " ✗ $statusLabel" -ForegroundColor Red
+        Write-Host "    $errorDetail" -ForegroundColor Red
+        $failed += [PSCustomObject]@{ Name=$svcName; From=$currentMode; To=$target; Error=$errorDetail; Status=$statusLabel }
     }
 }
 

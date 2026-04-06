@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     win-sweep software removal — list candidates, attempt uninstall, and clean up leftovers.
@@ -105,11 +105,29 @@ function Find-SoftwareEntry([string]$Name) {
     return $match
 }
 
+# ── Known Windows standard C:\ root directories (whitelist) ──
+$knownRootDirs = @(
+    'Windows', 'Program Files', 'Program Files (x86)', 'Users', 'PerfLogs',
+    'Recovery', '$Recycle.Bin', 'System Volume Information', 'Documents and Settings',
+    'ProgramData', 'Intel', 'AMD', 'NVIDIA', 'MSOCache', 'inetpub', 'Boot',
+    'EFI', 'OneDriveTemp', 'Drivers', 'swapfile.sys', 'pagefile.sys', 'hiberfil.sys'
+)
+
 # ── Shared leftover scanning function ──
 function Invoke-LeftoverScan([string]$Target) {
     $findings = @()
 
+    # Debug: confirm received parameter (helps diagnose encoding issues)
     Write-Host "`nTarget: $Target" -ForegroundColor Yellow
+    Write-Host "  [DEBUG] Target bytes: $(([System.Text.Encoding]::UTF8.GetBytes($Target) | ForEach-Object { '{0:X2}' -f $_ }) -join ' ')" -ForegroundColor DarkGray
+
+    # Build keyword variants for fuzzy matching
+    # e.g., "LuDaShi" -> matches "LudashiProtect", "ludashi_service", etc.
+    $targetLower = $Target.ToLower() -replace '[^a-z0-9\u4e00-\u9fff]', ''
+    $keywords = @($Target)
+    if ($targetLower -and $targetLower -ne $Target.ToLower()) {
+        $keywords += $targetLower
+    }
 
     # 1. Orphaned registry entries
     Write-Host "  Checking registry..." -ForegroundColor Gray
@@ -125,17 +143,30 @@ function Invoke-LeftoverScan([string]$Target) {
         }
     }
 
-    # 2. Orphaned services (including kernel drivers)
+    # 2. Orphaned services (including kernel drivers) — fuzzy keyword matching
     Write-Host "  Checking services and drivers..." -ForegroundColor Gray
     $services = @(Get-CimInstance Win32_Service | Where-Object {
-        $_.DisplayName -like "*$Target*" -or
-        $_.Name -like "*$Target*" -or
-        ($_.PathName -and $_.PathName -like "*$Target*")
+        $svc = $_
+        $keywords | Where-Object {
+            $k = $_
+            $svc.DisplayName -like "*$k*" -or
+            $svc.Name -like "*$k*" -or
+            # Case-insensitive substring match for partial keywords (e.g., "LuDaShi" matches "LudashiProtect")
+            ($svc.Name -and $svc.Name.ToLower().Contains($k.ToLower())) -or
+            ($svc.DisplayName -and $svc.DisplayName.ToLower().Contains($k.ToLower())) -or
+            ($svc.PathName -and $svc.PathName -like "*$k*")
+        } | Select-Object -First 1
     })
     $drivers = @(Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue | Where-Object {
-        $_.DisplayName -like "*$Target*" -or
-        $_.Name -like "*$Target*" -or
-        ($_.PathName -and $_.PathName -like "*$Target*")
+        $drv = $_
+        $keywords | Where-Object {
+            $k = $_
+            $drv.DisplayName -like "*$k*" -or
+            $drv.Name -like "*$k*" -or
+            ($drv.Name -and $drv.Name.ToLower().Contains($k.ToLower())) -or
+            ($drv.DisplayName -and $drv.DisplayName.ToLower().Contains($k.ToLower())) -or
+            ($drv.PathName -and $drv.PathName -like "*$k*")
+        } | Select-Object -First 1
     })
     foreach ($s in ($services + $drivers)) {
         $exePath = $null
@@ -162,12 +193,18 @@ function Invoke-LeftoverScan([string]$Target) {
         }
     }
 
-    # 3. Orphaned scheduled tasks
+    # 3. Orphaned scheduled tasks — fuzzy keyword matching
     Write-Host "  Checking scheduled tasks..." -ForegroundColor Gray
     $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
-        $_.TaskName -like "*$Target*" -or
-        $_.TaskPath -like "*$Target*" -or
-        (($_.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ' ') -like "*$Target*"
+        $t = $_
+        $actionsStr = ($t.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ' '
+        $keywords | Where-Object {
+            $k = $_
+            $t.TaskName -like "*$k*" -or
+            $t.TaskPath -like "*$k*" -or
+            ($t.TaskName -and $t.TaskName.ToLower().Contains($k.ToLower())) -or
+            $actionsStr -like "*$k*"
+        } | Select-Object -First 1
     }
     foreach ($t in $tasks) {
         $findings += [PSCustomObject]@{
@@ -353,6 +390,43 @@ function Invoke-LeftoverScan([string]$Target) {
                     }
                 }
             }
+    }
+
+    # 10. C:\ root anomaly scan — detect directories that don't belong in standard Windows
+    Write-Host "  Checking C:\ root for anomalous directories..." -ForegroundColor Gray
+    Get-ChildItem C:\ -Directory -ErrorAction SilentlyContinue | Where-Object {
+        $dirName = $_.Name
+        # Skip known standard directories (case-insensitive)
+        -not ($knownRootDirs | Where-Object { $dirName -eq $_ }) -and
+        # Skip hidden/system directories starting with $
+        -not $dirName.StartsWith('$')
+    } | ForEach-Object {
+        $dirName = $_.Name
+        # Check if it matches the target keyword OR contains Chinese characters (always suspicious at C:\)
+        $matchesTarget = $false
+        foreach ($k in $keywords) {
+            if ($dirName -like "*$k*" -or $dirName.ToLower().Contains($k.ToLower())) {
+                $matchesTarget = $true; break
+            }
+        }
+        # Also flag non-standard directories regardless of target match (if they contain CJK or look vendor-ish)
+        $hasCJK = $dirName -match '[\u4e00-\u9fff]'
+
+        if ($matchesTarget -or $hasCJK) {
+            $sizeBytes = (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                          Measure-Object -Property Length -Sum).Sum
+            $sizeMB = [math]::Round($sizeBytes / 1MB, 1)
+            $reason = if ($matchesTarget -and $hasCJK) { "Matches '$Target' + CJK name at C:\ root" }
+                      elseif ($matchesTarget) { "Matches '$Target' at C:\ root" }
+                      else { "[SUSPECT] Non-standard CJK-named directory at C:\ root" }
+            $findings += [PSCustomObject]@{
+                Type     = 'Directory'
+                Path     = $_.FullName
+                Detail   = "$reason ($sizeMB MB)"
+                Action   = 'Review and delete directory'
+                Command  = "Remove-Item -Path '$($_.FullName)' -Recurse -Force"
+            }
+        }
     }
 
     return $findings
