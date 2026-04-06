@@ -30,7 +30,10 @@ Run the diagnostic script to assess system state. Diagnostic operations are read
    - **JSON output** (`-Output Json`): Structured output for programmatic consumption by downstream scripts. Includes `Summary` and `Telemetry` sections.
    - **Telemetry section**: Built-in quick scan matching telemetry keyword patterns across services and scheduled tasks. See [telemetry.md](./references/telemetry.md) for full three-layer sweep.
    - **Multi-layer associations**: Detects products with presence across multiple layers (e.g., Edge update service + Edge update scheduled tasks) and warns about incomplete optimization.
+   - **Shortcut scan**: Scans Desktop, Start Menu, and Taskbar for dead, promotional, and advertised shortcuts. Classifies as `[DEAD]`, `[PROMO]`, `[ADVERTISED]`, or `[UNKNOWN]`. See [sc-gotchas.md](./references/sc-gotchas.md) item 17 for CJK shortcut pitfalls.
+   - **Cleanable space**: Estimates reclaimable space from User Temp, Windows Temp, Windows Update cache, Delivery Optimization cache, and Recycle Bin.
 2. Review output and identify optimization targets
+3. [Shortcut Scan](./scripts/clean-shortcuts.ps1) — Dead desktop/Start Menu/taskbar shortcuts, promotional bundleware links, empty program folders (can run independently of software uninstall)
 
 ### Phase 2: Optimization (Dangerous — Confirmation Required)
 
@@ -43,6 +46,11 @@ Execute targeted fixes based on diagnostic results. **All modification operation
 3. [Scheduled Task Cleanup](./scripts/clean-tasks.ps1) — Disable unnecessary scheduled tasks
    - **DeleteOrphaned** action (`-Action DeleteOrphaned`): Finds and removes tasks belonging to already-uninstalled software; exports task XML to backup before deletion
 4. [Suspicious Service Detection](./scripts/detect-suspicious.ps1) — Find leftover/unsigned/suspicious services **and kernel drivers**
+5. [Shortcut Cleanup](./scripts/clean-shortcuts.ps1) — Independent shortcut management (not tied to software uninstall)
+   - `-Action Scan`: Report all dead, promotional, and advertised shortcuts across Desktop, Start Menu, Taskbar
+   - `-Action Clean`: Delete [DEAD] and [PROMO] shortcuts with confirmation; [UNKNOWN] requires per-item confirmation; [ADVERTISED] skipped
+   - `-Action Repair`: Identify broken shortcuts for installed software; uses 8.3 short path fallback for CJK targets
+   - `-Action CleanEmptyFolders`: Remove empty Start Menu program folders
    - Scans both `Win32_Service` and `Win32_SystemDriver` (controlled by `-IncludeDrivers` flag, on by default)
    - Detects services with empty `PathName` (S1:EmptyImagePath) and suspicious file creation timestamps (S10)
 5. **Software Removal** (three-step workflow — see details below):
@@ -235,6 +243,8 @@ This enables post-hoc auditing and troubleshooting.
 - **Three-layer telemetry sweep** — Must check services + scheduled tasks + startup items simultaneously; disabling only one layer is ineffective (see [telemetry.md](./references/telemetry.md)). The diagnose script now includes a built-in telemetry quick scan and multi-layer association detection to ensure this is not forgotten.
 - **Multi-layer consistency** — When optimizing a product (e.g., disabling `edgeupdate` service), always check and handle the corresponding scheduled tasks and startup items for the same product. The diagnose script flags multi-layer associations to help enforce this.
 - **UTF-8 with BOM for all scripts** — All `.ps1` files must be saved with UTF-8 BOM (`EF BB BF`). PowerShell 5.1 on non-English Windows defaults to the system locale encoding, breaking scripts with non-ASCII characters. See [sc-gotchas.md](./references/sc-gotchas.md) item 15.
+- **Long scripts must be written to file** — Operations exceeding ~20 lines must be written to a `.ps1` file and executed with `powershell -File`, never pasted directly into the terminal. PSReadLine in VS Code's integrated terminal crashes on long pastes (see [sc-gotchas.md](./references/sc-gotchas.md) item 18).
+- **Advertised shortcuts are not dead shortcuts** — When scanning `.lnk` files, empty `TargetPath` does not mean the shortcut is invalid. MSI advertised shortcuts store targets differently. Cross-reference against installed software before marking as dead. See [sc-gotchas.md](./references/sc-gotchas.md) item 17c.
 - **Check what the service actually does** — Many games and third-party apps silently install always-on services (anti-cheat engines, game platform launchers, companion apps). During diagnosis, identify each service's actual purpose and whether it genuinely needs to run at boot. If the user only plays a game occasionally, its background service doesn't need to be Auto (see Pattern 9 & 10 in [service-rules.md](./references/service-rules.md))
 - **Decision framework over hardcoded lists** — Reference docs provide universal identification patterns, not hardcoded service name lists. Apply the framework to unknown services rather than only matching known lists
 - **Administrator privileges required** — Both diagnosis and modification benefit significantly from an elevated PowerShell session. **Without admin, diagnosis is incomplete**: service details (binary path, startup account, failure actions), HKLM startup items, scheduled task internals, and signature checks may fail or return partial data. The AI must detect the privilege level at the start of every session and, if not elevated, **proactively warn the user with a clear summary of what will be missing**:

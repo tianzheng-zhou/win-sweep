@@ -25,7 +25,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('Quick','Deep','All','System','Disk','DiskDeep','Software','Startups','Services','Tasks','Memory','Telemetry')]
+    [ValidateSet('Quick','Deep','All','System','Disk','DiskDeep','Software','Startups','Services','Tasks','Memory','Telemetry','Shortcuts','CleanableSpace')]
     [string[]]$Section = 'Quick',
 
     [ValidateSet('Text','Json')]
@@ -275,8 +275,6 @@ if ($runAll -or $runQuick -or $Section -contains 'Memory') {
         Format-Table -AutoSize
 }
 
-Write-Host "`nDiagnostics complete." -ForegroundColor Green
-
 # ── Telemetry Quick Scan ──
 if ($runAll -or $runQuick -or $Section -contains 'Telemetry') {
     Write-Section 'Telemetry Components (Quick Scan)'
@@ -348,6 +346,219 @@ if ($runAll -or $runQuick) {
     }
 }
 
+# ── Shortcut Scan ──
+if ($runAll -or $runQuick -or $Section -contains 'Shortcuts') {
+    Write-Section 'Shortcut Health (Desktop / Start Menu / Taskbar)'
+
+    # Known promotional keywords — shortcuts matching these with invalid targets are likely bundleware drops
+    $promoKeywords = @(
+        '安装向导', '修复工具', '优化大师', '清理大师', '清理工具',
+        '压缩', '壁纸', '浏览器', '加速', '驱动', '体检', '游戏盒子', '维修',
+        '免费领取', '红包', '练习', 'Setup', 'Install'
+    )
+
+    # Collect installed software names for cross-reference
+    $installedNames = @()
+    $regPaths2 = @(
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    $regPaths2 | ForEach-Object { Get-ItemProperty $_ -ErrorAction SilentlyContinue } |
+        Where-Object { $_.DisplayName -and $_.DisplayName.Trim() } |
+        ForEach-Object { $installedNames += $_.DisplayName.Trim() }
+
+    $shortcutLocations = @(
+        @{ Name='User Desktop';       Path=[Environment]::GetFolderPath('Desktop') }
+        @{ Name='Public Desktop';      Path=[Environment]::GetFolderPath('CommonDesktopDirectory') }
+        @{ Name='User Start Menu';     Path=[Environment]::GetFolderPath('StartMenu') }
+        @{ Name='All Users Start Menu'; Path=[Environment]::GetFolderPath('CommonStartMenu') }
+        @{ Name='Taskbar';             Path="$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar" }
+    )
+
+    $wshShell = New-Object -ComObject WScript.Shell
+    $shortcutResults = @()
+
+    foreach ($loc in $shortcutLocations) {
+        if (-not (Test-Path $loc.Path)) { continue }
+        $recurse = $loc.Name -match 'Start Menu'
+        $lnks = if ($recurse) {
+            Get-ChildItem $loc.Path -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue
+        } else {
+            Get-ChildItem $loc.Path -Filter '*.lnk' -ErrorAction SilentlyContinue
+        }
+
+        foreach ($lnk in $lnks) {
+            $status = 'OK'
+            $tag = ''
+            try {
+                $shortcut = $wshShell.CreateShortcut($lnk.FullName)
+                $target = $shortcut.TargetPath
+
+                if (-not $target -or $target.Trim() -eq '') {
+                    # Empty TargetPath: could be advertised shortcut or truly dead
+                    if ($lnk.Length -gt 500) {
+                        # Likely an MSI advertised shortcut — cross-check against installed software
+                        $matchesInstalled = $installedNames | Where-Object { $lnk.BaseName -like "*$_*" -or $_ -like "*$($lnk.BaseName)*" } | Select-Object -First 1
+                        if ($matchesInstalled) {
+                            $status = 'ADVERTISED'
+                            $tag = "Advertised (matches: $matchesInstalled)"
+                        } else {
+                            $status = 'UNKNOWN'
+                            $tag = 'Empty TargetPath, large file — possible advertised shortcut'
+                        }
+                    } else {
+                        $status = 'DEAD'
+                        $tag = 'Empty TargetPath, small file'
+                    }
+                } elseif (-not (Test-Path $target -ErrorAction SilentlyContinue)) {
+                    # Target path exists in shortcut but file is missing
+                    $isPromo = $false
+                    foreach ($kw in $promoKeywords) {
+                        if ($lnk.BaseName -like "*$kw*") { $isPromo = $true; break }
+                    }
+                    # Also check if it matches any installed software
+                    $matchesInstalled = $installedNames | Where-Object { $lnk.BaseName -like "*$_*" -or $_ -like "*$($lnk.BaseName)*" } | Select-Object -First 1
+
+                    if ($isPromo -and -not $matchesInstalled) {
+                        $status = 'PROMO'
+                        $tag = "Promotional — target missing: $target"
+                    } elseif ($matchesInstalled) {
+                        $status = 'DEAD'
+                        $tag = "Target missing (was: $matchesInstalled): $target"
+                    } else {
+                        $status = 'UNKNOWN'
+                        $tag = "Target missing, unknown origin: $target"
+                    }
+                }
+            } catch {
+                # WScript.Shell failed (possibly CJK filename issue, see sc-gotchas #17)
+                $status = 'ERROR'
+                $tag = "COM error: $($_.Exception.Message)"
+            }
+
+            if ($status -ne 'OK') {
+                $shortcutResults += [PSCustomObject]@{
+                    Location = $loc.Name
+                    Status   = "[$status]"
+                    Name     = $lnk.BaseName
+                    Detail   = $tag
+                }
+            }
+        }
+    }
+
+    # Also scan for empty Start Menu program folders
+    $emptyFolders = @()
+    foreach ($loc in $shortcutLocations | Where-Object { $_.Name -match 'Start Menu' }) {
+        $progDir = Join-Path $loc.Path 'Programs'
+        if (Test-Path $progDir) {
+            Get-ChildItem $progDir -Directory -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                $fileCount = (Get-ChildItem $_.FullName -File -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
+                if ($fileCount -eq 0) {
+                    $emptyFolders += [PSCustomObject]@{ Location=$loc.Name; Path=$_.FullName }
+                }
+            }
+        }
+    }
+
+    $deadCount = ($shortcutResults | Where-Object { $_.Status -match 'DEAD|PROMO|UNKNOWN|ERROR' }).Count
+    $promoCount = ($shortcutResults | Where-Object { $_.Status -eq '[PROMO]' }).Count
+    $advCount = ($shortcutResults | Where-Object { $_.Status -eq '[ADVERTISED]' }).Count
+
+    if ($shortcutResults.Count -eq 0 -and $emptyFolders.Count -eq 0) {
+        Write-Host "  All shortcuts are valid." -ForegroundColor Green
+    } else {
+        if ($shortcutResults.Count -gt 0) {
+            $shortcutResults | Sort-Object Location, Status |
+                Format-Table -Property Status, Location, Name, Detail -AutoSize -Wrap
+        }
+        if ($emptyFolders.Count -gt 0) {
+            Write-Host "  Empty Start Menu folders ($($emptyFolders.Count)):" -ForegroundColor Yellow
+            $emptyFolders | ForEach-Object { Write-Host "    - $($_.Path)" -ForegroundColor DarkGray }
+        }
+        Write-Host ""
+        if ($promoCount -gt 0) {
+            Write-Host "  [PROMO] shortcuts ($promoCount) are likely bundleware drops — safe to delete." -ForegroundColor Yellow
+        }
+        if ($advCount -gt 0) {
+            Write-Host "  [ADVERTISED] shortcuts ($advCount) are MSI advertised — do NOT delete without verification." -ForegroundColor Cyan
+        }
+    }
+
+    if ($Output -eq 'Json') {
+        $jsonResult['Shortcuts'] = @{
+            Issues = $shortcutResults
+            EmptyFolders = $emptyFolders
+            DeadCount = $deadCount
+            PromoCount = $promoCount
+            AdvertisedCount = $advCount
+        }
+    }
+}
+
+# ── Cleanable Space ──
+if ($runAll -or $runQuick -or $Section -contains 'CleanableSpace') {
+    Write-Section 'Cleanable Space Estimate'
+
+    $cleanable = @()
+
+    # User TEMP
+    $userTemp = $env:TEMP
+    if (Test-Path $userTemp) {
+        $sz = (Get-ChildItem $userTemp -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $cleanable += [PSCustomObject]@{ Area='User Temp (%TEMP%)'; SizeMB=[math]::Round($sz/1MB,1) }
+    }
+
+    # Windows Temp
+    $winTemp = "$env:SystemRoot\Temp"
+    if (Test-Path $winTemp) {
+        $sz = (Get-ChildItem $winTemp -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $cleanable += [PSCustomObject]@{ Area='Windows Temp'; SizeMB=[math]::Round($sz/1MB,1) }
+    }
+
+    # Windows Update Cache (SoftwareDistribution\Download)
+    $wuCache = "$env:SystemRoot\SoftwareDistribution\Download"
+    if (Test-Path $wuCache) {
+        $sz = (Get-ChildItem $wuCache -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $cleanable += [PSCustomObject]@{ Area='Windows Update Cache'; SizeMB=[math]::Round($sz/1MB,1) }
+    }
+
+    # Delivery Optimization
+    $doCache = "$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache"
+    if (Test-Path $doCache) {
+        $sz = (Get-ChildItem $doCache -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $cleanable += [PSCustomObject]@{ Area='Delivery Optimization'; SizeMB=[math]::Round($sz/1MB,1) }
+    }
+
+    # Recycle Bin item count (size requires Shell COM, just count items)
+    $recycleBin = (New-Object -ComObject Shell.Application).Namespace(0xA)
+    $rbCount = 0
+    if ($recycleBin) { $rbCount = $recycleBin.Items().Count }
+    $cleanable += [PSCustomObject]@{ Area="Recycle Bin ($rbCount items)"; SizeMB=$null }
+
+    $totalMB = ($cleanable | Where-Object { $_.SizeMB } | Measure-Object -Property SizeMB -Sum).Sum
+    $cleanable += [PSCustomObject]@{ Area='--- Total estimated reclaimable ---'; SizeMB=$totalMB }
+
+    $cleanable | Format-Table -Property Area, @{N='Size'; E={
+        if ($null -eq $_.SizeMB) { 'N/A' }
+        elseif ($_.SizeMB -ge 1024) { "$([math]::Round($_.SizeMB/1024,1)) GB" }
+        else { "$($_.SizeMB) MB" }
+    }} -AutoSize
+
+    if ($totalMB -ge 1024) {
+        Write-Host "  ~$([math]::Round($totalMB/1024,1)) GB reclaimable via Disk Cleanup (cleanmgr) or Storage Sense." -ForegroundColor Yellow
+    }
+
+    if ($Output -eq 'Json') {
+        $jsonResult['CleanableSpace'] = @{
+            Items = $cleanable | Where-Object { $_.Area -notmatch '^---' }
+            TotalMB = $totalMB
+            RecycleBinItems = $rbCount
+        }
+    }
+}
+
 # ── Summary ──
 if ($runAll -or $runQuick) {
     Write-Section 'Summary'
@@ -375,6 +586,17 @@ if ($runAll -or $runQuick) {
         }
     }
 
+    # Dead/promo shortcuts
+    if ($jsonResult.ContainsKey('Shortcuts') -and $jsonResult['Shortcuts'].DeadCount -gt 0) {
+        $sc = $jsonResult['Shortcuts']
+        $summaryIssues += "[WARN] $($sc.DeadCount) dead/invalid shortcut(s) found (PROMO: $($sc.PromoCount), ADVERTISED: $($sc.AdvertisedCount))"
+    }
+
+    # Cleanable space
+    if ($jsonResult.ContainsKey('CleanableSpace') -and $jsonResult['CleanableSpace'].TotalMB -ge 1024) {
+        $summaryIssues += "[INFO] ~$([math]::Round($jsonResult['CleanableSpace'].TotalMB / 1024, 1)) GB reclaimable temp/cache space"
+    }
+
     if ($summaryIssues.Count -eq 0) {
         Write-Host "  No major issues detected." -ForegroundColor Green
     } else {
@@ -388,6 +610,8 @@ if ($runAll -or $runQuick) {
         $jsonResult['Summary'] = $summaryIssues
     }
 }
+
+Write-Host "`nDiagnostics complete." -ForegroundColor Green
 
 # ── Json output ──
 if ($Output -eq 'Json' -and $jsonResult.Count -gt 0) {

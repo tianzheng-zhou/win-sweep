@@ -361,6 +361,77 @@ sc.exe config "SgrmBroker" start= disabled
 
 **When scripting, always check for exit code 5 specifically and report it as `[PROTECTED]` rather than a generic failure, so the human operator understands the limitation.**
 
+### 17. WScript.Shell COM Cannot Handle CJK Characters in .lnk Operations
+
+Three failure modes when using `WScript.Shell` COM on non-English (CJK) Windows:
+
+#### a) CreateShortcut with CJK filename fails
+
+```powershell
+$shell = New-Object -ComObject WScript.Shell
+$shell.CreateShortcut("C:\Users\Public\Desktop\夸克.lnk")
+# Throws: FileNotFoundException
+```
+
+**Workaround**: Create with an ASCII temp name, then rename via `[System.IO.File]::Move()`:
+
+```powershell
+$tempPath = "C:\Users\Public\Desktop\_temp_shortcut.lnk"
+$finalPath = "C:\Users\Public\Desktop\夸克.lnk"
+$lnk = $shell.CreateShortcut($tempPath)
+$lnk.TargetPath = "C:\Program Files\Quark\Quark.exe"
+$lnk.Save()
+[System.IO.File]::Move($tempPath, $finalPath)
+```
+
+#### b) TargetPath with CJK path fails
+
+```powershell
+$lnk.TargetPath = "C:\Program Files\TencentNews\腾讯新闻.exe"
+# Throws: ArgumentException: Value does not fall within the expected range
+```
+
+**Workaround**: Use 8.3 short file name. Discover it with `Scripting.FileSystemObject` COM or `cmd /c "dir /x"`:
+
+```powershell
+function Resolve-ShortPath($LongPath) {
+    $fso = New-Object -ComObject Scripting.FileSystemObject
+    return $fso.GetFile($LongPath).ShortPath
+}
+$lnk.TargetPath = Resolve-ShortPath "C:\Program Files\TencentNews\腾讯新闻.exe"
+# Returns something like: C:\PROGRA~1\TENCEN~1\BD046~1.EXE
+```
+
+#### c) Advertised shortcuts return empty TargetPath
+
+Many MSI-installed or bundleware-installed programs (especially Chinese software: 腾讯会议, 元宝, 腾讯新闻) create "advertised shortcuts." These store the target as an MSI feature ID rather than a file path. `WScript.Shell.CreateShortcut().TargetPath` returns an **empty string** for these.
+
+```powershell
+$lnk = $shell.CreateShortcut("C:\Users\Public\Desktop\腾讯会议.lnk")
+$lnk.TargetPath   # Returns "" — but the shortcut IS valid!
+```
+
+**Do NOT treat empty TargetPath as "dead shortcut"** without further checks:
+- Check if the `.lnk` file size is > 500 bytes (advertised shortcuts are typically larger)
+- Cross-reference the shortcut name against the installed software list (`Get-ItemProperty HKLM:\...\Uninstall\*`)
+- Read the `.lnk` binary content and search for target path fragments as ASCII/Unicode strings
+
+**In diagnostic output, mark these as `[ADVERTISED]` not `[DEAD]`.**
+
+### 18. Long Script Paste Crashes PSReadLine in VS Code Terminal
+
+Beyond the `} else {` terminal paste issue (#14), **any script longer than ~30 lines** pasted into VS Code's integrated terminal can trigger a PSReadLine buffer overflow crash:
+
+```
+SetCursorPosition: The value must be greater than or equal to zero
+```
+
+This affects complex multi-step operations like shortcut creation/repair scripts with loops, COM object handling, and error handling blocks.
+
+**Rule: For operations exceeding ~20 lines, always write to a `.ps1` file and execute with `powershell -File script.ps1`.** Never paste long scripts directly into the terminal.
+
+This supersedes and extends gotcha #14 — the mechanism is similar (PSReadLine's console buffer tracking breaks down) but the trigger is different (overall script length, not just `if/else` block structure).
+
 ---
 
 ## AI Self-Check Checklist
@@ -381,3 +452,6 @@ After generating PowerShell code, verify against this checklist:
 - [ ] Are `} else {`, `} catch {`, `} finally {` on the same line as `}`? (Terminal paste safety)
 - [ ] Are all `.ps1` files saved as UTF-8 with BOM? (Critical for non-English Windows)
 - [ ] When `sc.exe` returns exit code 5, is it reported as `[PROTECTED]` not just `[FAIL]`?
+- [ ] When using `WScript.Shell` to read `.lnk` files, do you handle empty `TargetPath` (advertised shortcuts) separately from truly dead shortcuts?
+- [ ] When creating `.lnk` with CJK filenames or targets, do you use the ASCII-create-then-rename or 8.3 short path workaround?
+- [ ] Is the script short enough to paste into terminal, or does it need to be written to a `.ps1` file first? (>20 lines → write to file)

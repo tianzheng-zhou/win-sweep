@@ -251,6 +251,25 @@ These patterns help identify software candidates for removal during a cleanup se
 **Examples**: McAfee WebAdvisor (bundled), WinZip Driver Updater, Segurazo, ByteFence, PC Optimizer Pro
 **Judgment**: Strong removal recommendation. Many of these are borderline malware.
 
+### Bundled Promotional Shortcuts (捆绑推广快捷方式)
+**Traits**: Desktop shortcuts that appear **without the corresponding software being installed**. Created by other software's installers as "promotional drops." These are NOT leftover shortcuts from uninstalled software — the advertised software was **never installed**.
+
+**Identification characteristics**:
+- `TargetPath` points to a non-existent file or directory (software was never installed)
+- Name is typically in Chinese, with promotional language (e.g., "XX安装向导", "XX修复工具", "XX极速版")
+- `CreationTime` clusters on the same day as another software's installation
+- Does NOT appear in the registry `Uninstall` lists (neither HKLM nor HKCU)
+- Often found on **Public Desktop** (affects all users) rather than per-user Desktop
+
+**Common promotional shortcut names** (keyword patterns):
+`安装向导`, `修复工具`, `优化大师`, `清理大师`, `压缩`, `壁纸`, `浏览器`, `加速`, `驱动`, `体检`, `游戏盒子`, `维修`, `免费领取`, `一键安装`, `极速版`, `特惠`, `福利`
+
+**Typical sources**: 360 ecosystem, 2345 ecosystem, 鲁大师 (drops 小鸟壁纸, game launcher shortcuts), driver installers (驱动精灵, 驱动人生), Chinese browser installers (搜狗, QQ, UC)
+
+**Judgment**: **Safe to delete immediately** — no software to uninstall, no cleanup needed. These are pure advertising artifacts. Use [clean-shortcuts.ps1](../scripts/clean-shortcuts.ps1) `-Action Scan` to identify and `-Action Clean` to remove.
+
+**Distinguishing from user-created shortcuts**: Some broken shortcuts may be the user's own downloads (e.g., game launchers, tool shortcuts). If the shortcut name does NOT match known promotional keywords AND does NOT match any installed software, mark as `[UNKNOWN]` and ask the user before deleting.
+
 ### Western Rogue Software / Scareware
 **Traits**: Aggressive pop-ups warning about "thousands of errors" or "PC at risk" to scare users into purchasing; fake scan results; auto-start with persistent tray notifications; difficult to uninstall cleanly; often bundled with free downloads. Unlike Chinese rogue software which relies on guardian processes, Western rogue software relies more on scare tactics and dark UX patterns.
 **Known categories and families**:
